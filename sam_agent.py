@@ -203,24 +203,28 @@ class PluginManager:
 # ===== MAIN SAM AGENT CLASS =====
 class SAMAgent:
     def __init__(self,
-                 model_name: str = "sam-1",
-                 context_limit: int = 128000,
+                 model_name: str = "qwen2.5-coder-14b-instruct",
+                 context_limit: int = 20000,
                  temperature: float = 0.3,
-                 base_url: str = "http://localhost:1234/v1",
+                 base_url: str = "http://192.168.1.81:1234/v1",
                  api_key: str = "lm-studio",
                  safety_mode: bool = True,
-                 auto_approve: bool = False):
+                 auto_approve: bool = False,
+                 config_file: str = "config.json"):
 
-        # Core configuration
-        self.model_name = model_name
-        self.context_limit = context_limit
-        self.temperature = temperature
-        self.base_url = base_url
-        self.api_key = api_key
+        # Load configuration if available
+        self.config = self._load_config(config_file)
 
-        # Safety configuration (key enhancement from Prism)
-        self.safety_mode = safety_mode
-        self.auto_approve = auto_approve
+        # Apply config values with constructor params as fallbacks
+        self.model_name = self.config.get('model', {}).get('model_name', model_name)
+        self.context_limit = self.config.get('model', {}).get('context_limit', context_limit)
+        self.temperature = self.config.get('model', {}).get('temperature', temperature)
+        self.base_url = self.config.get('lmstudio', {}).get('base_url', base_url)
+        self.api_key = self.config.get('lmstudio', {}).get('api_key', api_key)
+
+        # Safety configuration
+        self.safety_mode = self.config.get('agent', {}).get('safety_mode', safety_mode)
+        self.auto_approve = self.config.get('agent', {}).get('auto_approve', auto_approve)
         self.stop_requested = False
         self.stop_message = ""
 
@@ -241,10 +245,112 @@ class SAMAgent:
         # Plugin system
         self.plugin_manager = PluginManager(self)
 
-        # Build system prompt with safety information
+        # Get actual context length from API if enabled
+        if self.config.get('features', {}).get('use_loaded_context_length', True):
+            self._update_context_limit_from_api()
+
+        # Build system prompt
         self.system_prompt = self._build_system_prompt()
 
-        logger.info("🤖 Starting SAM initialization...")
+        logger.info("🤖 SAM Agent initialized")
+
+    def _load_config(self, config_file: str) -> dict:
+        """Load configuration from JSON file"""
+        try:
+            if os.path.exists(config_file):
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                logger.info(f"📋 Loaded configuration from {config_file}")
+                return config
+            else:
+                logger.info(f"📋 No config file found at {config_file}, using defaults")
+                return {}
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to load config: {e}")
+            return {}
+
+    def _get_model_info(self):
+        """Get model information from LMStudio API including loaded context length"""
+        try:
+            models_url = f"{self.base_url.replace('/v1', '')}/v1/models"
+            response = requests.get(models_url, timeout=10)
+
+            if response.status_code == 200:
+                models_data = response.json()
+
+                # Find the current model
+                for model in models_data.get('data', []):
+                    if model.get('id') == self.model_name:
+                        loaded_context = model.get('loaded_context_length', self.context_limit)
+                        max_context = model.get('max_context_length', loaded_context)
+
+                        logger.info(f"📊 Model: {self.model_name}")
+                        logger.info(f"📊 Loaded context: {loaded_context:,} tokens")
+                        logger.info(f"📊 Max context: {max_context:,} tokens")
+
+                        return {
+                            'model_id': model.get('id'),
+                            'loaded_context_length': loaded_context,
+                            'max_context_length': max_context,
+                            'state': model.get('state', 'unknown')
+                        }
+
+            logger.warning(f"⚠️  Could not get model info from {models_url}")
+            return None
+
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to get model info: {e}")
+            return None
+
+    def _update_context_limit_from_api(self):
+        """Update context limit based on actual loaded model"""
+        model_info = self._get_model_info()
+
+        if model_info and model_info.get('loaded_context_length'):
+            old_limit = self.context_limit
+            self.context_limit = model_info['loaded_context_length']
+
+            if old_limit != self.context_limit:
+                logger.info(f"🔄 Updated context limit: {old_limit:,} → {self.context_limit:,} tokens")
+
+            return model_info
+
+        return None
+
+    def switch_provider(self, provider_name: str) -> str:
+        """Switch between providers"""
+        if provider_name not in self.config.get('providers', {}):
+            return f"❌ Provider '{provider_name}' not found in config"
+
+        self.config['provider'] = provider_name
+
+        # Update relevant settings based on provider
+        provider_config = self.config['providers'][provider_name]
+
+        if provider_name == 'claude':
+            self.context_limit = provider_config.get('context_limit', 200000)
+            self.model_name = provider_config.get('model_name', 'claude-3-5-sonnet-20241022')
+        else:
+            # For LMStudio, try to get actual context length
+            if self.config.get('features', {}).get('use_loaded_context_length', True):
+                self._update_context_limit_from_api()
+            else:
+                self.context_limit = provider_config.get('context_limit', 20000)
+            self.model_name = provider_config.get('model_name', 'qwen2.5-coder-14b-instruct')
+
+            # Update instance variables for LMStudio
+            self.base_url = provider_config.get('base_url', self.base_url)
+            self.api_key = provider_config.get('api_key', self.api_key)
+
+        return f"✅ Switched to {provider_name} provider (model: {self.model_name}, context: {self.context_limit:,})"
+
+    def get_current_provider(self) -> str:
+        """Get current provider info"""
+        current = self.config.get('provider', 'unknown')
+        available = list(self.config.get('providers', {}).keys())
+        return f"📋 Current: {current} | Available: {', '.join(available)}"
+
+
 
     def _build_system_prompt(self) -> str:
         """Build the complete system prompt including safety information"""
@@ -585,7 +691,76 @@ IMPORTANT: If the user says "safety off" or similar commands, they are changing 
 
     # ===== LLM COMMUNICATION =====
     def generate_chat_completion(self, messages: List[Dict]) -> str:
-        """Generate chat completion using LM Studio API"""
+        """Generate chat completion using the configured provider"""
+        provider = self.config.get('provider', 'lmstudio')
+
+        if provider == 'claude':
+            return self._generate_claude_completion(messages)
+        else:
+            return self._generate_lmstudio_completion(messages)
+
+    def _generate_claude_completion(self, messages: List[Dict]) -> str:
+        """Generate completion using Claude API"""
+        try:
+            # Import anthropic here to avoid dependency issues
+            try:
+                import anthropic
+            except ImportError:
+                return "Error: anthropic package not installed. Run: pip install anthropic"
+
+            # Get Claude config
+            claude_config = self.config.get('providers', {}).get('claude', {})
+            api_key = claude_config.get('api_key')
+
+            # Handle environment variable substitution
+            if api_key and api_key.startswith('${') and api_key.endswith('}'):
+                env_var = api_key[2:-1]  # Remove ${ and }
+                api_key = os.environ.get(env_var)
+
+            if not api_key:
+                return "Error: ANTHROPIC_API_KEY not found in environment or config"
+
+            # Create client
+            client = anthropic.Anthropic(api_key=api_key)
+
+            # Prepare parameters
+            model = claude_config.get('model_name', 'claude-3-5-sonnet-20241022')
+            final_max_tokens = 4000
+            final_temperature = self.temperature
+
+            # Convert messages to Claude format
+            claude_messages = []
+            system_content = ""
+
+            for msg in messages:
+                if msg['role'] == 'system':
+                    system_content += msg['content'] + "\n"
+                else:
+                    claude_messages.append(msg)
+
+            # Create message with system prompt
+            response = client.messages.create(
+                model=model,
+                max_tokens=final_max_tokens,
+                temperature=final_temperature,
+                system=system_content.strip() if system_content else None,
+                messages=claude_messages
+            )
+
+            # Extract text response
+            response_text = ""
+            for content_block in response.content:
+                if hasattr(content_block, 'text'):
+                    response_text += content_block.text
+
+            return response_text.strip()
+
+        except Exception as e:
+            logger.error(f"Claude API error: {e}")
+            return f"Error calling Claude API: {str(e)}"
+
+    def _generate_lmstudio_completion(self, messages: List[Dict]) -> str:
+        """Generate completion using LMStudio API (your existing logic)"""
         try:
             headers = {
                 "Content-Type": "application/json",
@@ -817,13 +992,10 @@ def main():
     """CLI interface for SAM Agent"""
     print("🤖 Starting SAM initialization...")
 
-    # Initialize SAM with safety enabled by default
-    sam = SAMAgent(
-        safety_mode=True,
-        auto_approve=False
-    )
+    # Initialize SAM - will auto-load config.json
+    sam = SAMAgent()
 
-    # Load core tools plugin properly through plugin manager
+    # Load core tools plugin
     try:
         plugin_path = Path(__file__).parent / "plugins" / "core_tools.py"
         if sam.plugin_manager.load_plugin_from_file(str(plugin_path)):
@@ -833,18 +1005,19 @@ def main():
     except Exception as e:
         print(f"⚠️  Could not load core tools plugin: {e}")
 
-    # Test API connection
+    # Test API connection and show model info
     try:
         test_response = sam.generate_chat_completion([
             {"role": "user", "content": "Hello, are you working?"}
         ])
         if "error" not in test_response.lower():
             print("✅ API connection test successful!")
+            print(f"📊 Using model: {sam.model_name}")
+            print(f"📊 Context limit: {sam.context_limit:,} tokens")
         else:
-            print(f"⚠️  API test warning: {test_response}")
+            print(f"❌ API test failed: {test_response}")
     except Exception as e:
-        print(f"❌ API connection test failed: {e}")
-        return
+        print(f"❌ API connection failed: {e}")
 
     # Display capabilities using the tools_info
     tools_info = sam.list_tools()
@@ -861,6 +1034,7 @@ def main():
     print(f"\n=== 🤖 SAM Agent Interactive Mode ===")
     print("Type 'exit' to quit, 'tools' to list available tools")
     print("Commands: 'debug' (toggle debug), 'reset' (clear history), 'tools' (list tools)")
+    print("Providers: 'provider claude/lmstudio', 'providers' (list available)")
     print("Safety: 'safety on/off', 'auto on/off', 'safety' (status)")
 
     debug_mode = False
@@ -900,6 +1074,17 @@ def main():
 
                 if current_tools.get('mcp_tools'):
                     print(f"🌐 MCP Tools: {', '.join(current_tools['mcp_tools'])}")
+                continue
+
+            # Add this after the existing command handling in the main() while loop
+            elif user_input.lower().startswith('provider '):
+                provider_name = user_input.split(' ', 1)[1].strip()
+                result = sam.switch_provider(provider_name)
+                print(result)
+                continue
+            elif user_input.lower() == 'providers':
+                result = sam.get_current_provider()
+                print(result)
                 continue
 
             print("🤖 SAM is thinking...")
