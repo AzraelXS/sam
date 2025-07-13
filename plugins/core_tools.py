@@ -13,6 +13,7 @@ import time
 import random
 import subprocess
 import platform
+import signal
 from datetime import datetime, timedelta
 from io import StringIO
 from pathlib import Path
@@ -99,62 +100,35 @@ class CoreToolsPlugin(SAMPlugin):
             requires_approval=False
         )
 
-    def execute_code(self, code: str, language: str = "python") -> str:
+    def execute_code(self, code: str, language: str = "python", timeout: int = 30) -> str:
         """
         Execute code safely in a controlled environment.
 
         Args:
             code: Code to execute
-            language: Programming language (python, javascript, bash)
+            language: Programming language (python, javascript, bash, powershell)
+            timeout: Maximum execution time in seconds
 
         Returns:
             Execution result or error message
         """
-        if language.lower() not in ["python", "javascript", "bash", "shell"]:
+        if language.lower() not in ["python", "javascript", "bash", "shell", "powershell", "pwsh"]:
             return f"❌ Unsupported language: {language}"
 
         try:
             if language.lower() == "python":
-                return self._execute_python_code(code)
+                return self._execute_python_code(code, timeout)
             elif language.lower() == "javascript":
                 return self._execute_javascript_code(code)
             elif language.lower() in ["bash", "shell"]:
                 return self._execute_shell_code(code)
+            elif language.lower() in ["powershell", "pwsh"]:
+                return self._execute_powershell_code(code)
         except Exception as e:
             return f"❌ Execution error: {str(e)}"
 
-    def _execute_python_code(self, code: str) -> str:
-        """Execute Python code safely"""
-        # Create a restricted environment
-        restricted_globals = {
-            '__builtins__': {
-                'print': print,
-                'len': len,
-                'range': range,
-                'str': str,
-                'int': int,
-                'float': float,
-                'bool': bool,
-                'list': list,
-                'dict': dict,
-                'tuple': tuple,
-                'set': set,
-                'abs': abs,
-                'max': max,
-                'min': min,
-                'sum': sum,
-                'sorted': sorted,
-                'enumerate': enumerate,
-                'zip': zip,
-                'any': any,
-                'all': all,
-            },
-            'math': math,
-            'json': json,
-            'datetime': datetime,
-            'time': time,
-        }
-
+    def _execute_python_code(self, code: str, timeout: int = 30) -> str:
+        """Execute Python code with proper import support"""
         # Capture output
         old_stdout = sys.stdout
         old_stderr = sys.stderr
@@ -165,27 +139,79 @@ class CoreToolsPlugin(SAMPlugin):
             sys.stdout = stdout_capture
             sys.stderr = stderr_capture
 
-            # Execute the code
-            exec(code, restricted_globals)
+            result = None
+            error = None
+            start_time = time.time()
 
-            # Get output
-            output = stdout_capture.getvalue()
-            errors = stderr_capture.getvalue()
+            try:
+                # Create execution environment with proper imports
+                exec_globals = {
+                    '__builtins__': __builtins__,
+                    # Pre-import commonly needed modules
+                    'os': os,
+                    'sys': sys,
+                    'json': json,
+                    'math': math,
+                    'random': random,
+                    'datetime': datetime,
+                    'time': time,
+                    're': re,
+                    'pathlib': Path,
+                    'platform': platform,
+                    'subprocess': subprocess,  # Add subprocess
+                }
 
-            result = ""
-            if output:
-                result += f"Output:\n{output}"
-            if errors:
-                result += f"\nErrors:\n{errors}"
+                # Parse and execute code
+                tree = ast.parse(code)
 
-            if not result:
-                result = "✅ Code executed successfully (no output)"
+                # If last node is an expression, evaluate it for return value
+                if tree.body and isinstance(tree.body[-1], ast.Expr):
+                    # Execute all but last statement
+                    if len(tree.body) > 1:
+                        statements = ast.Module(body=tree.body[:-1], type_ignores=[])
+                        exec(compile(statements, '<string>', 'exec'), exec_globals)
 
-            return result
+                    # Evaluate final expression
+                    expr = ast.Expression(body=tree.body[-1].value)
+                    result = eval(compile(expr, '<string>', 'eval'), exec_globals)
+                else:
+                    # Execute as statements
+                    exec(code, exec_globals)
 
-        except Exception as e:
-            return f"❌ Python execution error: {str(e)}\n{traceback.format_exc()}"
+            except Exception as e:
+                error = f"{type(e).__name__}: {str(e)}"
+
+            execution_time = time.time() - start_time
+
+            # Collect output
+            stdout_text = stdout_capture.getvalue()
+            stderr_text = stderr_capture.getvalue()
+
+            # Format response
+            output_parts = [
+                f"🐍 Python Code Executed ({execution_time:.3f}s)"
+            ]
+
+            if stdout_text.strip():
+                output_parts.append(f"\n📤 Output:\n{stdout_text}")
+
+            if result is not None:
+                output_parts.append(f"\n🔢 Return Value: {repr(result)}")
+
+            if stderr_text.strip():
+                output_parts.append(f"\n⚠️  Stderr:\n{stderr_text}")
+
+            if error:
+                output_parts.append(f"\n❌ Error: {error}")
+
+            # Show subprocess results if no output
+            if not stdout_text.strip() and result is None and not stderr_text.strip() and not error:
+                output_parts.append("\n⚠️  No output captured - check if subprocess commands are working correctly")
+
+            return "".join(output_parts)
+
         finally:
+            # Restore stdout/stderr
             sys.stdout = old_stdout
             sys.stderr = old_stderr
 
@@ -209,12 +235,12 @@ class CoreToolsPlugin(SAMPlugin):
 
                 output = ""
                 if result.stdout:
-                    output += f"Output:\n{result.stdout}"
+                    output += f"📤 Output:\n{result.stdout}"
                 if result.stderr:
-                    output += f"\nErrors:\n{result.stderr}"
+                    output += f"\n⚠️  Errors:\n{result.stderr}"
 
                 if result.returncode != 0:
-                    output += f"\nExit code: {result.returncode}"
+                    output += f"\n❌ Exit code: {result.returncode}"
 
                 return output or "✅ JavaScript executed successfully (no output)"
 
@@ -231,9 +257,9 @@ class CoreToolsPlugin(SAMPlugin):
     def _execute_shell_code(self, code: str) -> str:
         """Execute shell commands safely"""
         # Basic safety checks
-        dangerous_commands = ['rm -rf', 'sudo', 'passwd', 'chmod 777', 'dd if=']
+        dangerous_commands = ['rm -rf', 'sudo', 'passwd', 'chmod 777', 'dd if=', 'format', 'del /']
         if any(cmd in code.lower() for cmd in dangerous_commands):
-            return "❌ Potentially dangerous command detected. Execution blocked."
+            return "❌ Potentially dangerous command detected. Execution blocked for safety."
 
         try:
             result = subprocess.run(
@@ -246,12 +272,12 @@ class CoreToolsPlugin(SAMPlugin):
 
             output = ""
             if result.stdout:
-                output += f"Output:\n{result.stdout}"
+                output += f"📤 Output:\n{result.stdout}"
             if result.stderr:
-                output += f"\nErrors:\n{result.stderr}"
+                output += f"\n⚠️  Errors:\n{result.stderr}"
 
             if result.returncode != 0:
-                output += f"\nExit code: {result.returncode}"
+                output += f"\n❌ Exit code: {result.returncode}"
 
             return output or "✅ Shell command executed successfully (no output)"
 
@@ -259,6 +285,35 @@ class CoreToolsPlugin(SAMPlugin):
             return "❌ Shell command timed out"
         except Exception as e:
             return f"❌ Shell execution error: {str(e)}"
+
+    def _execute_powershell_code(self, code: str) -> str:
+        """Execute PowerShell commands"""
+        try:
+            # Use PowerShell to execute the command
+            result = subprocess.run(
+                ["powershell", "-Command", code],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            output = ""
+            if result.stdout:
+                output += f"📤 Output:\n{result.stdout}"
+            if result.stderr:
+                output += f"\n⚠️  Errors:\n{result.stderr}"
+
+            if result.returncode != 0:
+                output += f"\n❌ Exit code: {result.returncode}"
+
+            return output or "✅ PowerShell command executed successfully (no output)"
+
+        except subprocess.TimeoutExpired:
+            return "❌ PowerShell command timed out"
+        except FileNotFoundError:
+            return "❌ PowerShell not found. Please ensure PowerShell is installed and in PATH."
+        except Exception as e:
+            return f"❌ PowerShell execution error: {str(e)}"
 
     def calculate(self, expression: str) -> str:
         """
@@ -271,10 +326,7 @@ class CoreToolsPlugin(SAMPlugin):
             Result of the calculation
         """
         try:
-            # Remove any potentially dangerous functions
-            safe_expression = re.sub(r'[^0-9+\-*/().%\s]', '', expression)
-
-            # Use eval with restricted globals for safety
+            # Create a safe environment for math
             safe_globals = {
                 '__builtins__': {},
                 'abs': abs,
@@ -287,142 +339,151 @@ class CoreToolsPlugin(SAMPlugin):
                 'cos': math.cos,
                 'tan': math.tan,
                 'log': math.log,
+                'log10': math.log10,
                 'exp': math.exp,
                 'pi': math.pi,
                 'e': math.e,
+                'degrees': math.degrees,
+                'radians': math.radians,
+                'factorial': math.factorial,
             }
 
-            result = eval(safe_expression, safe_globals)
-            return f"📊 Result: {result}"
+            # Clean and validate the expression
+            # Allow numbers, operators, parentheses, and math functions
+            if re.search(r'[^0-9+\-*/().%\s\w]', expression):
+                return "❌ Expression contains invalid characters"
+
+            result = eval(expression, safe_globals)
+            return f"🧮 Calculation Result: {result}"
 
         except Exception as e:
             return f"❌ Calculation error: {str(e)}"
 
-    def get_current_time(self, format: str = "%Y-%m-%d %H:%M:%S") -> str:
+    def get_current_time(self, format: str = "%m-%d-%Y %H:%M:%S", timezone: str = "local") -> str:
         """
         Get the current date and time.
 
         Args:
-            format: Time format string (default: "%Y-%m-%d %H:%M:%S")
+            format: Time format string (default: "%m-%d-%Y %H:%M:%S")
+            timezone: Timezone (currently only supports "local")
 
         Returns:
             Formatted current time
         """
         try:
             now = datetime.now()
-            return f"🕐 Current time: {now.strftime(format)}"
+            formatted_time = now.strftime(format)
+            return f"🕒 Current time: {formatted_time}"
         except Exception as e:
             return f"❌ Time format error: {str(e)}"
 
-    def list_files(self, directory: str = ".", pattern: str = "*") -> str:
+    def list_files(self, directory: str = ".", pattern: str = "*", max_files: int = 50) -> str:
         """
         List files in a directory.
 
         Args:
-            directory: Directory path to list (default: current directory)
+            directory: Directory to list (default: current directory)
             pattern: File pattern to match (default: all files)
+            max_files: Maximum number of files to return
 
         Returns:
-            List of files in the directory
+            List of files matching the pattern
         """
         try:
-            import glob
+            dir_path = Path(directory)
+            if not dir_path.exists():
+                return f"❌ Directory does not exist: {directory}"
 
-            path = Path(directory).resolve()
-            if not path.exists():
-                return f"❌ Directory not found: {directory}"
+            if not dir_path.is_dir():
+                return f"❌ Path is not a directory: {directory}"
 
-            if not path.is_dir():
-                return f"❌ Not a directory: {directory}"
-
-            search_pattern = str(path / pattern)
-            files = glob.glob(search_pattern)
+            # Get files matching pattern
+            files = list(dir_path.glob(pattern))[:max_files]
 
             if not files:
-                return f"📁 No files found matching pattern '{pattern}' in {directory}"
+                return f"📂 No files found matching pattern '{pattern}' in {directory}"
 
-            # Sort and format file list
-            files.sort()
+            # Format file list
             file_list = []
-
             for file_path in files:
-                file_obj = Path(file_path)
-                if file_obj.is_file():
-                    size = file_obj.stat().st_size
-                    size_str = self._format_file_size(size)
-                    file_list.append(f"📄 {file_obj.name} ({size_str})")
-                elif file_obj.is_dir():
-                    file_list.append(f"📁 {file_obj.name}/")
+                if file_path.is_file():
+                    size = file_path.stat().st_size
+                    file_list.append(f"📄 {file_path.name} ({size} bytes)")
+                elif file_path.is_dir():
+                    file_list.append(f"📁 {file_path.name}/")
 
-            return f"📁 Files in {directory}:\n" + "\n".join(file_list)
+            result = f"📂 Files in {directory}:\n"
+            result += "\n".join(file_list)
+
+            if len(files) == max_files:
+                result += f"\n... (truncated to {max_files} files)"
+
+            return result
 
         except Exception as e:
             return f"❌ Error listing files: {str(e)}"
 
-    def read_file(self, file_path: str, max_lines: int = 100) -> str:
+    def read_file(self, file_path: str, max_size: int = 100000) -> str:
         """
         Read contents of a text file.
 
         Args:
             file_path: Path to the file to read
-            max_lines: Maximum number of lines to read (default: 100)
+            max_size: Maximum file size to read (bytes)
 
         Returns:
             File contents or error message
         """
         try:
-            path = Path(file_path).resolve()
-            if not path.exists():
-                return f"❌ File not found: {file_path}"
+            file_path = Path(file_path)
 
-            if not path.is_file():
-                return f"❌ Not a file: {file_path}"
+            if not file_path.exists():
+                return f"❌ File does not exist: {file_path}"
+
+            if not file_path.is_file():
+                return f"❌ Path is not a file: {file_path}"
 
             # Check file size
-            size = path.stat().st_size
-            if size > 1024 * 1024:  # 1MB limit
-                return f"❌ File too large to read: {self._format_file_size(size)}"
+            file_size = file_path.stat().st_size
+            if file_size > max_size:
+                return f"❌ File too large ({file_size} bytes, max: {max_size} bytes)"
 
             # Read file content
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
+            content = file_path.read_text(encoding='utf-8', errors='replace')
 
-            if len(lines) > max_lines:
-                content = ''.join(lines[:max_lines])
-                content += f"\n... (truncated, showing first {max_lines} lines of {len(lines)})"
-            else:
-                content = ''.join(lines)
-
-            return f"📄 Contents of {file_path}:\n```\n{content}\n```"
+            return f"📄 File: {file_path}\n" + "=" * 50 + f"\n{content}\n" + "=" * 50
 
         except Exception as e:
             return f"❌ Error reading file: {str(e)}"
 
-    def write_file(self, file_path: str, content: str, append: bool = False) -> str:
+    def write_file(self, file_path: str, content: str, mode: str = "w") -> str:
         """
         Write content to a file.
 
         Args:
             file_path: Path to the file to write
             content: Content to write to the file
-            append: Whether to append to existing file (default: False)
+            mode: Write mode ('w' for overwrite, 'a' for append)
 
         Returns:
             Success message or error
         """
         try:
-            path = Path(file_path).resolve()
+            file_path = Path(file_path)
 
-            # Create parent directories if they don't exist
-            path.parent.mkdir(parents=True, exist_ok=True)
+            # Create directory if it doesn't exist
+            file_path.parent.mkdir(parents=True, exist_ok=True)
 
-            mode = 'a' if append else 'w'
-            with open(path, mode, encoding='utf-8') as f:
-                f.write(content)
+            if mode == "a":
+                file_path.write_text(content, encoding='utf-8')
+                action = "appended to"
+            else:
+                with open(file_path, mode, encoding='utf-8') as f:
+                    f.write(content)
+                action = "written to"
 
-            action = "appended to" if append else "written to"
             size = len(content.encode('utf-8'))
-            return f"✅ Content {action} {file_path} ({self._format_file_size(size)})"
+            return f"✅ Content {action} {file_path} ({size} bytes)"
 
         except Exception as e:
             return f"❌ Error writing file: {str(e)}"
@@ -432,49 +493,49 @@ class CoreToolsPlugin(SAMPlugin):
         Get system information.
 
         Returns:
-            System information including OS, CPU, memory, etc.
+            System information summary
         """
         try:
-            info = []
+            info = {
+                "platform": platform.platform(),
+                "system": platform.system(),
+                "processor": platform.processor(),
+                "architecture": platform.architecture(),
+                "python_version": platform.python_version(),
+                "hostname": platform.node(),
+            }
 
-            # Basic system info
-            info.append(f"🖥️ Platform: {platform.platform()}")
-            info.append(f"💻 System: {platform.system()} {platform.release()}")
-            info.append(f"🏗️ Architecture: {platform.architecture()[0]}")
-            info.append(f"🔧 Machine: {platform.machine()}")
-            info.append(f"📍 Node: {platform.node()}")
+            result = "💻 System Information:\n"
+            result += f"🖥️  Platform: {info['platform']}\n"
+            result += f"⚙️  System: {info['system']}\n"
+            result += f"🔧 Processor: {info['processor']}\n"
+            result += f"🏗️  Architecture: {info['architecture'][0]}\n"
+            result += f"🐍 Python: {info['python_version']}\n"
+            result += f"🌐 Hostname: {info['hostname']}"
 
-            # Python info
-            info.append(f"🐍 Python: {platform.python_version()}")
-
-            # CPU info
-            try:
-                import psutil
-                cpu_count = psutil.cpu_count()
-                cpu_percent = psutil.cpu_percent(interval=1)
-                info.append(f"⚡ CPU: {cpu_count} cores, {cpu_percent:.1f}% usage")
-
-                # Memory info
-                memory = psutil.virtual_memory()
-                total_gb = memory.total / (1024 ** 3)
-                used_gb = memory.used / (1024 ** 3)
-                info.append(f"🧠 Memory: {used_gb:.1f}GB / {total_gb:.1f}GB ({memory.percent:.1f}% used)")
-
-            except ImportError:
-                info.append("📊 Install 'psutil' for detailed system metrics")
-
-            return "🖥️ System Information:\n" + "\n".join(info)
+            return result
 
         except Exception as e:
             return f"❌ Error getting system info: {str(e)}"
 
-    def _format_file_size(self, size_bytes: int) -> str:
-        """Format file size in human readable format"""
-        if size_bytes < 1024:
-            return f"{size_bytes} B"
-        elif size_bytes < 1024 ** 2:
-            return f"{size_bytes / 1024:.1f} KB"
-        elif size_bytes < 1024 ** 3:
-            return f"{size_bytes / (1024 ** 2):.1f} MB"
-        else:
-            return f"{size_bytes / (1024 ** 3):.1f} GB"
+
+# Create the plugin instance
+def get_plugin():
+    """Plugin entry point"""
+    return CoreToolsPlugin()
+
+
+# For direct execution testing
+if __name__ == "__main__":
+    plugin = CoreToolsPlugin()
+
+    # Test the execute_code function
+    test_code = """
+from datetime import datetime
+current_time = datetime.now()
+print(current_time.strftime('%Y-%m-%d %H:%M:%S'))
+"""
+
+    print("Testing execute_code function:")
+    result = plugin.execute_code(test_code, "python")
+    print(result)
