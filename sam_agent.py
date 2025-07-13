@@ -3,7 +3,7 @@
 SAM Agent - Semi-Autonomous Model
 Enhanced AI agent with safety controls, tool approval system, and raw result display
 """
-
+import importlib.util
 import os
 import sys
 import json
@@ -129,14 +129,75 @@ class PluginManager:
         self.plugins = {}
         self.plugin_dir = Path(__file__).parent / "plugins"
 
-    def load_plugin(self, plugin_path: str) -> bool:
-        """Load a plugin from file"""
+    def load_plugin_from_file(self, plugin_path: str) -> bool:
+        """Load a plugin from a Python file"""
         try:
-            # Dynamic plugin loading logic here
-            return True
+            plugin_path = Path(plugin_path)
+            if not plugin_path.exists():
+                logger.error(f"Plugin file not found: {plugin_path}")
+                return False
+
+            # Add the main module directory to sys.path
+            main_dir = str(Path(__file__).parent)
+            if main_dir not in sys.path:
+                sys.path.insert(0, main_dir)
+
+            # Load the module
+            spec = importlib.util.spec_from_file_location(plugin_path.stem, plugin_path)
+            if not spec or not spec.loader:
+                logger.error(f"Could not load spec for {plugin_path}")
+                return False
+
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            # Handle __main__ vs sam_agent module name issue
+            target_samplugin = SAMPlugin
+            if hasattr(module, 'SAMPlugin'):
+                target_samplugin = module.SAMPlugin
+
+            # Look for plugin class
+            plugin_class = None
+            for item_name in dir(module):
+                item = getattr(module, item_name)
+                if (isinstance(item, type) and
+                        issubclass(item, target_samplugin) and
+                        item != target_samplugin):
+                    plugin_class = item
+                    break
+
+            if not plugin_class:
+                logger.error(f"No SAMPlugin subclass found in {plugin_path}")
+                return False
+
+            # Instantiate and register
+            plugin = plugin_class()
+            return self.register_plugin(plugin)
+
         except Exception as e:
-            logger.error(f"Failed to load plugin {plugin_path}: {e}")
+            logger.error(f"Error loading plugin {plugin_path}: {str(e)}")
             return False
+
+    def register_plugin(self, plugin: SAMPlugin) -> bool:
+        """Register a plugin instance"""
+        try:
+            if plugin.name in self.plugins:
+                logger.warning(f"Plugin {plugin.name} already loaded, replacing...")
+
+            self.plugins[plugin.name] = plugin
+            plugin.on_load(self.agent)
+            plugin.register_tools(self.agent)
+
+            logger.info(f"Loaded plugin: {plugin.name} v{plugin.version}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error registering plugin {plugin.name}: {str(e)}")
+            return False
+
+    def load_plugin(self, plugin_path: str) -> bool:
+        """Legacy method - calls load_plugin_from_file"""
+        return self.load_plugin_from_file(plugin_path)
 
 
 # ===== MAIN SAM AGENT CLASS =====
@@ -762,13 +823,14 @@ def main():
         auto_approve=False
     )
 
-    # Load core tools plugin
+    # Load core tools plugin properly through plugin manager
     try:
-        from plugins.core_tools import CoreToolsPlugin
-        core_plugin = CoreToolsPlugin()
-        core_plugin.register_tools(sam)
-        print("✅ Core tools plugin loaded successfully!")
-    except ImportError as e:
+        plugin_path = Path(__file__).parent / "plugins" / "core_tools.py"
+        if sam.plugin_manager.load_plugin_from_file(str(plugin_path)):
+            print("✅ Core tools plugin loaded successfully!")
+        else:
+            print("❌ Failed to load core tools plugin")
+    except Exception as e:
         print(f"⚠️  Could not load core tools plugin: {e}")
 
     # Test API connection

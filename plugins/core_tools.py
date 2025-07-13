@@ -22,26 +22,8 @@ import inspect
 import ast
 import traceback
 
-# Robust import handling for dynamic plugin loading
-try:
-    # First try normal import
-    from sam_agent import SAMPlugin, ToolCategory
-except ImportError:
-    # If that fails, try adding the parent directory to sys.path
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.dirname(current_dir)
-    if parent_dir not in sys.path:
-        sys.path.insert(0, parent_dir)
-
-    # Try import again
-    try:
-        from sam_agent import SAMPlugin, ToolCategory
-    except ImportError:
-        # Last resort: try the project root
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from sam_agent import SAMPlugin, ToolCategory
+# Simple, clean import - no complex fallback logic needed
+from sam_agent import SAMPlugin, ToolCategory
 
 
 class CoreToolsPlugin(SAMPlugin):
@@ -158,7 +140,7 @@ class CoreToolsPlugin(SAMPlugin):
                     're': re,
                     'pathlib': Path,
                     'platform': platform,
-                    'subprocess': subprocess,  # Add subprocess
+                    'subprocess': subprocess,
                 }
 
                 # Parse and execute code
@@ -475,7 +457,8 @@ class CoreToolsPlugin(SAMPlugin):
             file_path.parent.mkdir(parents=True, exist_ok=True)
 
             if mode == "a":
-                file_path.write_text(content, encoding='utf-8')
+                with open(file_path, mode, encoding='utf-8') as f:
+                    f.write(content)
                 action = "appended to"
             else:
                 with open(file_path, mode, encoding='utf-8') as f:
