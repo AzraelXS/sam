@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+websockets
+python-dotenv
+requests
+urllib3
+mcp

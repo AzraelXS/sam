@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAM - Semi-Autonomous Model</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+    <div class="app" id="app">
+        <!-- Sidebar -->
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">SAM</div>
+                <div class="sidebar-title">Semi-Autonomous Model</div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <div class="nav-section-title">Chat</div>
+                    <button class="nav-item active" id="new-chat-btn">
+                        <div class="nav-item-icon">💬</div>
+                        <div class="nav-item-text">New Chat</div>
+                    </button>
+                    <button class="nav-item" id="chat-history-btn">
+                        <div class="nav-item-icon">📋</div>
+                        <div class="nav-item-text">Chat History</div>
+                    </button>
+                </div>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">Tools</div>
+                    <button class="nav-item" id="tools-btn">
+                        <div class="nav-item-icon">🔧</div>
+                        <div class="nav-item-text">Available Tools</div>
+                    </button>
+                    <button class="nav-item" id="capabilities-btn">
+                        <div class="nav-item-icon">⚡</div>
+                        <div class="nav-item-text">Capabilities</div>
+                    </button>
+                </div>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">System</div>
+                    <button class="nav-item" id="settings-btn">
+                        <div class="nav-item-icon">⚙️</div>
+                        <div class="nav-item-text">Settings</div>
+                    </button>
+                    <button class="nav-item" id="about-btn">
+                        <div class="nav-item-icon">ℹ️</div>
+                        <div class="nav-item-text">About</div>
+                    </button>
+                </div>
+            </nav>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Chat Container -->
+            <div class="chat-container">
+                <!-- Chat Header -->
+                <div class="chat-header">
+                    <div class="chat-title">
+                        <button class="sidebar-toggle-btn" id="sidebar-toggle">☰</button>
+                        <div>
+                            <h1>SAM Agent</h1>
+                            <div class="chat-subtitle">Semi-Autonomous Model - Ready to assist</div>
+                        </div>
+                    </div>
+                    <div class="chat-actions">
+                        <button class="btn btn-secondary" id="clear-chat-btn">Clear Chat</button>
+                        <button class="btn btn-secondary" id="save-chat-btn">Save Chat</button>
+                    </div>
+                </div>
+
+                <!-- Messages Container -->
+                <main class="messages-container" id="messages-container">
+                    <div class="message assistant">
+                        <div class="message-content">
+                            <div class="message-text">
+                                <p>👋 Hello! I'm <strong class="text-gradient">SAM</strong> (Semi-Autonomous Model), your AI assistant.</p>
+                                <p>I can help you with various tasks including:</p>
+                                <ul>
+                                    <li>💻 Code development and debugging</li>
+                                    <li>📁 File and system operations</li>
+                                    <li>🌐 Web research and analysis</li>
+                                    <li>📝 Text processing and analysis</li>
+                                    <li>🔧 Tool execution and automation</li>
+                                </ul>
+                                <p>What would you like me to help you with today?</p>
+                            </div>
+                            <div class="message-timestamp">Just now</div>
+                        </div>
+                    </div>
+                </main>
+
+                <!-- Input Container -->
+                <div class="input-container">
+                    <div class="input-area">
+                        <div class="input-wrapper">
+                            <div class="input-area">
+                                <textarea
+                                    id="message-input"
+                                    placeholder="Type your message to SAM..."
+                                    rows="1"
+                                ></textarea>
+                            </div>
+                            <button class="send-button" id="send-button">↑</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal" id="settings-modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>SAM Settings</h3>
+                <button class="modal-close" id="close-settings-modal">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-section">
+                    <h4>Appearance</h4>
+                    <label class="setting-item">
+                        <span>Theme</span>
+                        <select id="theme-select">
+                            <option value="dark">Dark</option>
+                            <option value="light">Light</option>
+                            <option value="auto">Auto</option>
+                        </select>
+                    </label>
+                    <label class="setting-item">
+                        <span>Font Size</span>
+                        <select id="font-size-select">
+                            <option value="small">Small</option>
+                            <option value="medium">Medium</option>
+                            <option value="large">Large</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="settings-section">
+                    <h4>Behavior</h4>
+                    <label class="setting-item">
+                        <span>Auto-scroll to new messages</span>
+                        <input type="checkbox" id="auto-scroll-checkbox" checked>
+                    </label>
+                    <label class="setting-item">
+                        <span>Sound notifications</span>
+                        <input type="checkbox" id="sound-notifications-checkbox">
+                    </label>
+                </div>
+
+                <div class="settings-section">
+                    <h4>Advanced</h4>
+                    <label class="setting-item">
+                        <span>Enable debugging mode</span>
+                        <input type="checkbox" id="debug-mode-checkbox">
+                    </label>
+                    <label class="setting-item">
+                        <span>Tool execution timeout (seconds)</span>
+                        <input type="number" id="tool-timeout-input" value="30" min="5" max="300">
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancel-settings-btn">Cancel</button>
+                <button class="btn btn-primary" id="save-settings-btn">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- About Modal -->
+    <div class="modal" id="about-modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>About SAM</h3>
+                <button class="modal-close" id="close-about-modal">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="text-center">
+                    <div class="sidebar-logo" style="width: 64px; height: 64px; margin: 0 auto 16px; font-size: 24px;">SAM</div>
+                    <h2 class="text-gradient">Semi-Autonomous Model</h2>
+                    <p class="text-muted">AI Agent with Advanced Capabilities</p>
+                </div>
+
+                <div class="settings-section">
+                    <h4>Version Information</h4>
+                    <div id="app-info">Loading...</div>
+                </div>
+
+                <div class="settings-section">
+                    <h4>Features</h4>
+                    <ul>
+                        <li>🤖 Advanced conversational AI</li>
+                        <li>🔧 Extensive tool integration</li>
+                        <li>🌐 Web research capabilities</li>
+                        <li>💻 Code execution and analysis</li>
+                        <li>📁 File system operations</li>
+                        <li>🔌 Plugin system support</li>
+                        <li>📡 MCP (Model Context Protocol) integration</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" id="close-about-ok-btn">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/5.1.1/marked.min.js"></script>
+    <script src="renderer/sam-app.js"></script>
+</body>
+</html>
