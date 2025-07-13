@@ -792,7 +792,7 @@ def main():
     print(f"🔧 Local tools: {len(sam.local_tools)}")
     print(f"🌐 MCP tools: {len(sam.mcp_tools)}")
     print(f"🔌 Plugins: {len(sam.plugin_manager.plugins)}")
-    print(f"🛡️  Safety mode: {'ON' if sam.safety_mode else 'OFF'}")
+    print(f"🛡️ Safety mode: {'ON' if sam.safety_mode else 'OFF'}")
     print(f"🤖 Auto-approve: {'ON' if sam.auto_approve else 'OFF'}")
 
     # Interactive loop
