@@ -83,50 +83,18 @@ def load_all_plugins(sam):
         return
 
     loaded_count = 0
-    initial_plugin_count = len(sam.plugin_manager.plugins)
-
     print(f"🔍 Scanning for plugins in {plugins_dir}")
 
     # Load all .py files in plugins directory
     for plugin_file in plugins_dir.glob("*.py"):
-        if plugin_file.name.startswith("__"):
+        if plugin_file.name.startswith("_"):
             continue  # Skip __init__.py, __pycache__, etc.
 
-        print(f"  📄 Found plugin file: {plugin_file.name}")
+        if sam.plugin_manager.load_plugin_from_file(str(plugin_file), sam):
+            loaded_count += 1
 
-        try:
-            plugins_before = len(sam.plugin_manager.plugins)
-
-            if sam.plugin_manager.load_plugin_from_file(str(plugin_file)):
-                plugins_after = len(sam.plugin_manager.plugins)
-
-                if plugins_after > plugins_before:
-                    # Find the newly loaded plugin
-                    new_plugins = [name for name in sam.plugin_manager.plugins.keys()
-                                   if name not in list(sam.plugin_manager.plugins.keys())[:plugins_before]]
-
-                    for plugin_name in sam.plugin_manager.plugins.keys():
-                        if plugin_name not in []:  # Simple way to get the latest plugin
-                            plugin = sam.plugin_manager.plugins[plugin_name]
-
-                            # Register tools for this plugin
-                            tools_before = len(sam.local_tools)
-                            plugin.register_tools(sam)
-                            tools_added = len(sam.local_tools) - tools_before
-
-                            if tools_added > 0:
-                                print(f"    ✅ {plugin_name} loaded ({tools_added} tools)")
-                                loaded_count += 1
-                            break
-            else:
-                print(f"    ❌ Failed to load {plugin_file.name}")
-
-        except Exception as e:
-            print(f"    ⚠️ Error loading {plugin_file.name}: {e}")
-
-    final_plugin_count = len(sam.plugin_manager.plugins)
-    total_plugins_loaded = final_plugin_count - initial_plugin_count
-    print(f"📦 Auto-discovery complete: {total_plugins_loaded} plugins loaded, {len(sam.local_tools)} total tools")
+    if loaded_count > 0:
+        print(f"📦 Loaded {loaded_count} plugins, {len(sam.local_tools)} total tools")
 
 # ===== PLUGIN SYSTEM =====
 class SAMPlugin:
@@ -157,31 +125,64 @@ class PluginManager:
     def __init__(self):
         self.plugins: Dict[str, SAMPlugin] = {}
 
-    def load_plugin_from_file(self, plugin_path: str) -> bool:
+    def load_plugin_from_file(self, plugin_path: str, agent) -> bool:
         """Load a plugin from a Python file"""
         try:
             import importlib.util
+            plugin_path_obj = Path(plugin_path)
+
             spec = importlib.util.spec_from_file_location("plugin", plugin_path)
             module = importlib.util.module_from_spec(spec)
+            sys.modules[plugin_path_obj.stem] = module
             spec.loader.exec_module(module)
 
-            # Look for create_plugin function or plugin classes
-            if hasattr(module, 'create_plugin'):
-                plugin = module.create_plugin()
-                self.register_plugin(plugin)
-                return True
-            else:
-                logger.error(f"Plugin {plugin_path} does not have create_plugin function")
+            # First try factory function
+            if hasattr(module, 'create_plugin') and callable(getattr(module, 'create_plugin')):
+                try:
+                    plugin = module.create_plugin()
+                    return self.register_plugin(plugin, agent)
+                except Exception as e:
+                    logger.error(f"Error calling create_plugin() in {plugin_path}: {str(e)}")
+                    return False
+
+            # Look for plugin class
+            plugin_class = None
+            for item_name in dir(module):
+                item = getattr(module, item_name)
+                if (isinstance(item, type) and
+                        issubclass(item, SAMPlugin) and
+                        item != SAMPlugin):
+                    plugin_class = item
+                    break
+
+            if not plugin_class:
+                logger.error(f"No SAMPlugin subclass found in {plugin_path}")
                 return False
 
+            # Instantiate and register
+            plugin = plugin_class()
+            return self.register_plugin(plugin, agent)
+
         except Exception as e:
-            logger.error(f"Failed to load plugin {plugin_path}: {str(e)}")
+            logger.error(f"Error loading plugin {plugin_path}: {str(e)}")
             return False
 
-    def register_plugin(self, plugin: SAMPlugin):
+    def register_plugin(self, plugin: SAMPlugin, agent) -> bool:
         """Register a plugin instance"""
-        self.plugins[plugin.name] = plugin
-        logger.info(f"Registered plugin: {plugin.name} v{plugin.version}")
+        try:
+            if plugin.name in self.plugins:
+                logger.warning(f"Plugin {plugin.name} already loaded, replacing...")
+
+            self.plugins[plugin.name] = plugin
+            plugin.on_load(agent)
+            plugin.register_tools(agent)
+
+            logger.info(f"Loaded plugin: {plugin.name} v{plugin.version}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error registering plugin {plugin.name}: {str(e)}")
+            return False
 
     def unload_plugin(self, plugin_name: str):
         """Unload a plugin"""
