@@ -75,6 +75,59 @@ class ToolInfo:
     usage_count: int = 0
 
 
+def load_all_plugins(sam):
+    """Auto-load all plugins from the plugins directory"""
+    plugins_dir = Path(__file__).parent / "plugins"
+    if not plugins_dir.exists():
+        print("⚠️ Plugins directory not found")
+        return
+
+    loaded_count = 0
+    initial_plugin_count = len(sam.plugin_manager.plugins)
+
+    print(f"🔍 Scanning for plugins in {plugins_dir}")
+
+    # Load all .py files in plugins directory
+    for plugin_file in plugins_dir.glob("*.py"):
+        if plugin_file.name.startswith("__"):
+            continue  # Skip __init__.py, __pycache__, etc.
+
+        print(f"  📄 Found plugin file: {plugin_file.name}")
+
+        try:
+            plugins_before = len(sam.plugin_manager.plugins)
+
+            if sam.plugin_manager.load_plugin_from_file(str(plugin_file)):
+                plugins_after = len(sam.plugin_manager.plugins)
+
+                if plugins_after > plugins_before:
+                    # Find the newly loaded plugin
+                    new_plugins = [name for name in sam.plugin_manager.plugins.keys()
+                                   if name not in list(sam.plugin_manager.plugins.keys())[:plugins_before]]
+
+                    for plugin_name in sam.plugin_manager.plugins.keys():
+                        if plugin_name not in []:  # Simple way to get the latest plugin
+                            plugin = sam.plugin_manager.plugins[plugin_name]
+
+                            # Register tools for this plugin
+                            tools_before = len(sam.local_tools)
+                            plugin.register_tools(sam)
+                            tools_added = len(sam.local_tools) - tools_before
+
+                            if tools_added > 0:
+                                print(f"    ✅ {plugin_name} loaded ({tools_added} tools)")
+                                loaded_count += 1
+                            break
+            else:
+                print(f"    ❌ Failed to load {plugin_file.name}")
+
+        except Exception as e:
+            print(f"    ⚠️ Error loading {plugin_file.name}: {e}")
+
+    final_plugin_count = len(sam.plugin_manager.plugins)
+    total_plugins_loaded = final_plugin_count - initial_plugin_count
+    print(f"📦 Auto-discovery complete: {total_plugins_loaded} plugins loaded, {len(sam.local_tools)} total tools")
+
 # ===== PLUGIN SYSTEM =====
 class SAMPlugin:
     """Base class for SAM plugins"""
@@ -1334,21 +1387,8 @@ def main():
             # Initialize SAM
             sam = SAMAgent(safety_mode=True, auto_approve=True)  # Enable auto_approve for API mode
 
-            # Load core tools plugin
-            try:
-                plugin_path = Path(__file__).parent / "plugins" / "core_tools.py"
-                if sam.plugin_manager.load_plugin_from_file(str(plugin_path)):
-                    print("✅ Core tools plugin loaded successfully!")
-
-                    # Register the tools with SAM
-                    core_plugin = sam.plugin_manager.plugins.get("Core Tools")
-                    if core_plugin:
-                        core_plugin.register_tools(sam)
-                        print(f"🔧 Registered {len(sam.local_tools)} tools from Core Tools plugin")
-                else:
-                    print("❌ Failed to load core tools plugin")
-            except Exception as e:
-                print(f"⚠️  Could not load core tools plugin: {e}")
+            # Auto-load all plugins from the plugins directory
+            load_all_plugins(sam)
 
             # Start API server
             server = SAMAPIServer(sam, host=args.api_host, port=args.api_port)
@@ -1366,22 +1406,8 @@ def main():
     # Initialize SAM - will auto-load config.json
     sam = SAMAgent()
 
-    # Load core tools plugin
-    try:
-        plugin_path = Path(__file__).parent / "plugins" / "core_tools.py"
-        if sam.plugin_manager.load_plugin_from_file(str(plugin_path)):
-            print("✅ Core tools plugin loaded successfully!")
-
-            # IMPORTANT: Register the tools with SAM
-            core_plugin = sam.plugin_manager.plugins.get("Core Tools")
-            if core_plugin:
-                core_plugin.register_tools(sam)
-                print(f"🔧 Registered {len(sam.local_tools)} tools from Core Tools plugin")
-
-        else:
-            print("❌ Failed to load core tools plugin")
-    except Exception as e:
-        print(f"⚠️  Could not load core tools plugin: {e}")
+    # Auto-load all plugins from the plugins directory
+    load_all_plugins(sam)
 
     # Test API connection and show model info
     try:
