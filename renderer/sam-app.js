@@ -627,10 +627,3 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
     window.samApp.applyTheme();
   }
 });
-
-// Handle window focus for input
-window.addEventListener('focus', () => {
-  if (window.samAPI && window.samAPI.fixInputFocus) {
-    window.samAPI.fixInputFocus();
-  }
-});

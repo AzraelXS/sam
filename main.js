@@ -191,15 +191,12 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('fix-input-focus', async () => {
-    if (mainWindow) {
-      mainWindow.blur();
-      setTimeout(() => {
-        mainWindow.focus();
-      }, 50);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.focus();
       return { success: true };
     }
     return { success: false };
-  });
+});
 
   // ===== DEVELOPMENT HELPERS =====
   if (isDev) {

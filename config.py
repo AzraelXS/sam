@@ -289,7 +289,7 @@ class SAMConfig:
     # Meta information
     version: str = "1.0.0"
     agent_name: str = "SAM"
-    agent_description: str = "Semi-Autonomous Model AI Agent"
+    agent_description: str = "Secret Agent Man AI Agent"
 
     # Component configurations
     lmstudio: LMStudioConfig = field(default_factory=LMStudioConfig)

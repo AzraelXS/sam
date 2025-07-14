@@ -1,7 +1,7 @@
 {
   "name": "sam-ai-agent",
   "version": "1.0.0",
-  "description": "SAM - Semi-Autonomous Model Desktop App",
+  "description": "SAM - Secret Agent Man Desktop App",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

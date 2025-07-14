@@ -4,6 +4,9 @@ SAM Agent - Semi-Autonomous Model AI Agent
 Enhanced with full Model Context Protocol (MCP) support
 """
 
+
+
+
 import json
 import logging
 import time
@@ -20,6 +23,9 @@ from enum import Enum
 
 # Import configuration
 from config import SAMConfig
+
+if sys.platform.startswith('win'):
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 # Set up logging (will be configured after loading config)
 logger = logging.getLogger("SAMAgent")
@@ -1109,7 +1115,7 @@ class SAMAgent:
                 messages = [
                     {
                         "role": "system",
-                        "content": f"""You are SAM (Semi-Autonomous Model), an AI assistant with access to tools for various tasks.
+                        "content": f"""You are SAM (Secret Agent Man), an AI assistant with access to tools for various tasks.
 
     CRITICAL TOOL USAGE INSTRUCTIONS:
     - When you need to use a tool, respond with a JSON object in this EXACT format:
@@ -1308,6 +1314,53 @@ class SAMAgent:
 # ===== CLI INTERFACE =====
 def main():
     """CLI interface for SAM Agent"""
+    import argparse
+
+    # Add argument parsing
+    parser = argparse.ArgumentParser(description="SAM Agent - Secret Agent Man")
+    parser.add_argument("--api", action="store_true", help="Run as HTTP API server")
+    parser.add_argument("--api-host", type=str, default="0.0.0.0", help="API server host")
+    parser.add_argument("--api-port", type=int, default=8888, help="API server port")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+
+    args = parser.parse_args()
+
+    # If --api flag is provided, run API server instead of interactive mode
+    if args.api:
+        if FASTAPI_AVAILABLE:
+            print("🌐 Starting SAM API Server...")
+
+            # Initialize SAM
+            sam = SAMAgent(safety_mode=True, auto_approve=True)  # Enable auto_approve for API mode
+
+            # Load core tools plugin
+            try:
+                plugin_path = Path(__file__).parent / "plugins" / "core_tools.py"
+                if sam.plugin_manager.load_plugin_from_file(str(plugin_path)):
+                    print("✅ Core tools plugin loaded successfully!")
+
+                    # Register the tools with SAM
+                    core_plugin = sam.plugin_manager.plugins.get("Core Tools")
+                    if core_plugin:
+                        core_plugin.register_tools(sam)
+                        print(f"🔧 Registered {len(sam.local_tools)} tools from Core Tools plugin")
+                else:
+                    print("❌ Failed to load core tools plugin")
+            except Exception as e:
+                print(f"⚠️  Could not load core tools plugin: {e}")
+
+            # Start API server
+            server = SAMAPIServer(sam, host=args.api_host, port=args.api_port)
+            print(f"🚀 Starting server on http://{server.host}:{server.port}")
+            print("📚 API docs available at http://localhost:8888/docs")
+            server.run()
+            return
+        else:
+            print("❌ FastAPI not available. Install with: pip install fastapi uvicorn")
+            return
+
+    # If no --api flag, continue with original interactive mode
     print("🤖 Starting SAM initialization...")
 
     # Initialize SAM - will auto-load config.json
@@ -1517,7 +1570,7 @@ if FASTAPI_AVAILABLE:
             self.port = port
             self.app = FastAPI(
                 title="SAM Agent API",
-                description="Semi-Autonomous Model API with Safety Controls and MCP Support",
+                description="Secret Agent Man API with Safety Controls and MCP Support",
                 version="1.0.0"
             )
             self.start_time = time.time()
