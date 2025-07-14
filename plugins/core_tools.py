@@ -522,3 +522,7 @@ print(current_time.strftime('%Y-%m-%d %H:%M:%S'))
     print("Testing execute_code function:")
     result = plugin.execute_code(test_code, "python")
     print(result)
+
+def create_plugin():
+    """Factory function to create the plugin instance"""
+    return CoreToolsPlugin()

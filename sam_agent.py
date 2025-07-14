@@ -1,98 +1,69 @@
 # !/usr/bin/env python3
 """
-SAM Agent - Semi-Autonomous Model
-Enhanced AI agent with safety controls, tool approval system, and raw result display
+SAM Agent - Semi-Autonomous Model AI Agent
+Enhanced with full Model Context Protocol (MCP) support
 """
-import importlib.util
+
+import json
+import logging
+import time
+import traceback
+import re
+import inspect
+import asyncio
 import os
 import sys
-import json
-import time
-import logging
-import asyncio
-import re
-import traceback
-import requests
-from enum import Enum
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Callable
-from dataclasses import dataclass
 from pathlib import Path
-import inspect
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Callable
+from enum import Enum
 
-# Pydantic models for API
+# Import configuration
+from config import SAMConfig
+
+# Set up logging (will be configured after loading config)
+logger = logging.getLogger("SAMAgent")
+
+# Optional imports with availability flags
 try:
-    from pydantic import BaseModel
+    import requests
+
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+    logger.warning("requests not available - some functionality may be limited")
+
+try:
     from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel
+    import uvicorn
 
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
-    BaseModel = object
-
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('SAM')
-
-# ===== PYDANTIC MODELS (if available) =====
-if FASTAPI_AVAILABLE:
-    class QueryRequest(BaseModel):
-        message: str
-        session_id: str = "default"
-        max_iterations: int = 10
-        verbose: bool = False
-        auto_approve: bool = None
+    logger.warning("FastAPI not available - API server functionality disabled")
 
 
-    class QueryResponse(BaseModel):
-        response: str
-        session_id: str
-        status: str
-        timestamp: str
-        error: Optional[str] = None
-
-
-    class HealthResponse(BaseModel):
-        status: str
-        model: str
-        tools_count: int
-        plugins_count: int
-        uptime_seconds: float
-
-
-    class ToolExecutionRequest(BaseModel):
-        tool_name: str
-        arguments: Dict[str, Any]
-        session_id: str = "default"
-
-
-    class ToolExecutionResponse(BaseModel):
-        success: bool
-        result: Optional[str] = None
-        error: Optional[str] = None
-        execution_time: float
-        tool_name: str
-
-
-# ===== TOOL CLASSIFICATION SYSTEM =====
+# Tool categories
 class ToolCategory(Enum):
-    FILESYSTEM = "filesystem"
-    WEB_BROWSING = "web"
-    COMMUNICATION = "communication"
-    DEVELOPMENT = "development"
-    SYSTEM = "system"
     UTILITY = "utility"
-    AI_SERVICES = "ai_services"
+    DEVELOPMENT = "development"
+    FILESYSTEM = "filesystem"
+    SYSTEM = "system"
+    COMMUNICATION = "communication"
+    WEB = "web"
+    DATA = "data"
+    SECURITY = "security"
+    MULTIMEDIA = "multimedia"
 
 
 @dataclass
 class ToolInfo:
+    """Information about a registered tool"""
     function: Callable
     description: str
-    parameters: Dict
+    parameters: Dict[str, Any]
     category: ToolCategory
     requires_approval: bool = False
     usage_count: int = 0
@@ -108,15 +79,15 @@ class SAMPlugin:
         self.description = description
         self.enabled = True
 
-    def register_tools(self, agent: 'SAMAgent'):
-        """Register plugin tools with the agent"""
+    def register_tools(self, agent):
+        """Override this method to register tools with the agent"""
         pass
 
-    def on_load(self, agent: 'SAMAgent'):
+    def on_load(self, agent):
         """Called when plugin is loaded"""
         pass
 
-    def on_unload(self, agent: 'SAMAgent'):
+    def on_unload(self, agent):
         """Called when plugin is unloaded"""
         pass
 
@@ -124,433 +95,559 @@ class SAMPlugin:
 class PluginManager:
     """Manages SAM plugins"""
 
-    def __init__(self, agent):
-        self.agent = agent
-        self.plugins = {}
-        self.plugin_dir = Path(__file__).parent / "plugins"
+    def __init__(self):
+        self.plugins: Dict[str, SAMPlugin] = {}
 
     def load_plugin_from_file(self, plugin_path: str) -> bool:
         """Load a plugin from a Python file"""
         try:
-            plugin_path = Path(plugin_path)
-            if not plugin_path.exists():
-                logger.error(f"Plugin file not found: {plugin_path}")
-                return False
-
-            # Add the main module directory to sys.path
-            main_dir = str(Path(__file__).parent)
-            if main_dir not in sys.path:
-                sys.path.insert(0, main_dir)
-
-            # Load the module
-            spec = importlib.util.spec_from_file_location(plugin_path.stem, plugin_path)
-            if not spec or not spec.loader:
-                logger.error(f"Could not load spec for {plugin_path}")
-                return False
-
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("plugin", plugin_path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            # Handle __main__ vs sam_agent module name issue
-            target_samplugin = SAMPlugin
-            if hasattr(module, 'SAMPlugin'):
-                target_samplugin = module.SAMPlugin
-
-            # Look for plugin class
-            plugin_class = None
-            for item_name in dir(module):
-                item = getattr(module, item_name)
-                if (isinstance(item, type) and
-                        issubclass(item, target_samplugin) and
-                        item != target_samplugin):
-                    plugin_class = item
-                    break
-
-            if not plugin_class:
-                logger.error(f"No SAMPlugin subclass found in {plugin_path}")
+            # Look for create_plugin function or plugin classes
+            if hasattr(module, 'create_plugin'):
+                plugin = module.create_plugin()
+                self.register_plugin(plugin)
+                return True
+            else:
+                logger.error(f"Plugin {plugin_path} does not have create_plugin function")
                 return False
 
-            # Instantiate and register
-            plugin = plugin_class()
-            return self.register_plugin(plugin)
-
         except Exception as e:
-            logger.error(f"Error loading plugin {plugin_path}: {str(e)}")
+            logger.error(f"Failed to load plugin {plugin_path}: {str(e)}")
             return False
 
-    def register_plugin(self, plugin: SAMPlugin) -> bool:
+    def register_plugin(self, plugin: SAMPlugin):
         """Register a plugin instance"""
-        try:
-            if plugin.name in self.plugins:
-                logger.warning(f"Plugin {plugin.name} already loaded, replacing...")
+        self.plugins[plugin.name] = plugin
+        logger.info(f"Registered plugin: {plugin.name} v{plugin.version}")
 
-            self.plugins[plugin.name] = plugin
-            plugin.on_load(self.agent)
-            plugin.register_tools(self.agent)
+    def unload_plugin(self, plugin_name: str):
+        """Unload a plugin"""
+        if plugin_name in self.plugins:
+            del self.plugins[plugin_name]
+            logger.info(f"Unloaded plugin: {plugin_name}")
 
-            logger.info(f"Loaded plugin: {plugin.name} v{plugin.version}")
-            return True
 
-        except Exception as e:
-            logger.error(f"Error registering plugin {plugin.name}: {str(e)}")
-            return False
+# ===== API MODELS (if FastAPI available) =====
+if FASTAPI_AVAILABLE:
+    class QueryRequest(BaseModel):
+        message: str
+        max_iterations: int = 5
+        verbose: bool = False
+        auto_approve: Optional[bool] = None
+        session_id: Optional[str] = None
 
-    def load_plugin(self, plugin_path: str) -> bool:
-        """Legacy method - calls load_plugin_from_file"""
-        return self.load_plugin_from_file(plugin_path)
+
+    class QueryResponse(BaseModel):
+        response: str
+        session_id: str
+        status: str
+        timestamp: str
+        error: Optional[str] = None
+
+
+    class ToolExecutionRequest(BaseModel):
+        tool_name: str
+        arguments: Dict[str, Any]
+
+
+    class ToolExecutionResponse(BaseModel):
+        success: bool
+        result: Optional[str] = None
+        error: Optional[str] = None
+        execution_time: float
+        tool_name: str
+
+
+    class HealthResponse(BaseModel):
+        status: str
+        model: str
+        tools_count: int
+        plugins_count: int
+        uptime_seconds: float
 
 
 # ===== MAIN SAM AGENT CLASS =====
 class SAMAgent:
-    def __init__(self,
-                 model_name: str = "qwen2.5-coder-14b-instruct",
-                 context_limit: int = 20000,
-                 temperature: float = 0.3,
-                 base_url: str = "http://192.168.1.81:1234/v1",
-                 api_key: str = "lm-studio",
-                 safety_mode: bool = True,
-                 auto_approve: bool = False,
-                 config_file: str = "config.json"):
+    """Semi-Autonomous Model AI Agent with MCP support"""
 
-        # Load configuration if available
-        self.config = self._load_config(config_file)
+    def __init__(self, model_name: str = None, context_limit: int = None, safety_mode: bool = True,
+                 auto_approve: bool = False):
+        """Initialize SAM Agent"""
 
-        # Apply config values with constructor params as fallbacks
-        self.model_name = self.config.get('model', {}).get('model_name', model_name)
-        self.context_limit = self.config.get('model', {}).get('context_limit', context_limit)
-        self.temperature = self.config.get('model', {}).get('temperature', temperature)
-        self.base_url = self.config.get('lmstudio', {}).get('base_url', base_url)
-        self.api_key = self.config.get('lmstudio', {}).get('api_key', api_key)
+        # Load configuration
+        self.config = self._load_config()
 
-        # Safety configuration
-        self.safety_mode = self.config.get('agent', {}).get('safety_mode', safety_mode)
-        self.auto_approve = self.config.get('agent', {}).get('auto_approve', auto_approve)
+        # Configure logging based on config
+        self._configure_logging()
+
+        # Model configuration
+        self.base_url = self.config.lmstudio.base_url
+        self.model_name = model_name or self.config.model.name
+        self.context_limit = context_limit or self.config.model.context_limit
+
+        # Agent state
+        self.conversation_history = []
+        self.safety_mode = safety_mode
+        self.auto_approve = auto_approve
         self.stop_requested = False
         self.stop_message = ""
 
-        # State management
-        self.conversation_history = []
-        self.local_tools = {}
-        self.mcp_tools = {}
-        self.tool_info = {}
-        self.mcp_sessions = {}
+        # Tool management
+        self.local_tools = {}  # tool_name -> {"function": func, "category": str, "requires_approval": bool}
+        self.tool_info = {}  # tool_name -> ToolInfo object
+        self.tools_by_category = {category: [] for category in ToolCategory}
 
-        # Statistics
-        self._refusal_stats = {
-            "total_queries": 0,
-            "refusals_detected": 0,
-            "successful_retries": 0
-        }
+        # MCP (Model Context Protocol) support
+        self.mcp_sessions = {}  # server_name -> session
+        self.mcp_tools = {}  # tool_name -> (server_name, tool_info)
+        self._mcp_auto_connect_pending = True  # Flag to trigger auto-connect when event loop starts
 
         # Plugin system
-        self.plugin_manager = PluginManager(self)
+        self.plugin_manager = PluginManager()
 
-        # Get actual context length from API if enabled
-        if self.config.get('features', {}).get('use_loaded_context_length', True):
-            self._update_context_limit_from_api()
+        logger.info(f"SAM Agent initialized with model: {self.model_name}")
+        logger.info(f"Context limit: {self.context_limit:,} tokens")
+        logger.info(f"Safety mode: {'ON' if self.safety_mode else 'OFF'}")
 
-        # Build system prompt
-        self.system_prompt = self._build_system_prompt()
+        # Note: MCP auto-connection will happen when run() is first called
 
-        logger.info("🤖 SAM Agent initialized")
-
-    def _load_config(self, config_file: str) -> dict:
-        """Load configuration from JSON file"""
+    def _configure_logging(self):
+        """Configure logging based on config settings"""
         try:
-            if os.path.exists(config_file):
-                with open(config_file, 'r') as f:
-                    config = json.load(f)
-                logger.info(f"📋 Loaded configuration from {config_file}")
-                return config
-            else:
-                logger.info(f"📋 No config file found at {config_file}, using defaults")
-                return {}
+            # Get logging level from config
+            log_level_str = getattr(self.config.logging, 'level', 'INFO')
+            log_level = getattr(logging, log_level_str.upper(), logging.INFO)
+
+            # Configure logging
+            logging.basicConfig(
+                level=log_level,
+                format=getattr(self.config.logging, 'format',
+                               "%(asctime)s - %(name)s - %(levelname)s - %(message)s"),
+                force=True  # Override any existing configuration
+            )
+
+            # Set console handler based on config
+            console_enabled = getattr(self.config.logging, 'console_enabled', True)
+            if not console_enabled:
+                # Remove console handlers if disabled
+                root_logger = logging.getLogger()
+                for handler in root_logger.handlers[:]:
+                    if isinstance(handler, logging.StreamHandler):
+                        root_logger.removeHandler(handler)
+
         except Exception as e:
-            logger.warning(f"⚠️  Failed to load config: {e}")
-            return {}
+            # Fallback to INFO if config fails
+            logging.basicConfig(level=logging.INFO, force=True)
+            logger.warning(f"Failed to configure logging from config: {e}")
 
-    def _get_model_info(self):
-        """Get model information from LMStudio API including loaded context length"""
+    async def _ensure_mcp_auto_connect(self):
+        """Ensure MCP auto-connection happens once when needed"""
+        if (self._mcp_auto_connect_pending and
+                hasattr(self.config, 'mcp') and
+                self.config.mcp.enabled and
+                getattr(self.config.mcp, 'servers', None)):
+            self._mcp_auto_connect_pending = False
+            logger.info("Performing delayed MCP auto-connection...")
+            await self._auto_connect_mcp_servers()
+        elif self._mcp_auto_connect_pending:
+            self._mcp_auto_connect_pending = False
+            logger.info("MCP auto-connection skipped (disabled or no servers)")
+
+    def _load_config(self) -> SAMConfig:
+        """Load configuration from config.json or create default"""
+        config_path = Path("config.json")
+
+        if config_path.exists():
+            try:
+                with open(config_path, 'r') as f:
+                    config_data = json.load(f)
+                    logger.info("Loaded configuration from config.json")
+
+                # Create SAMConfig from loaded data
+                config = SAMConfig()
+
+                # Update config with loaded data
+                if 'lmstudio' in config_data:
+                    for key, value in config_data['lmstudio'].items():
+                        setattr(config.lmstudio, key, value)
+
+                if 'model' in config_data:
+                    for key, value in config_data['model'].items():
+                        setattr(config.model, key, value)
+
+                if 'mcp' in config_data:
+                    for key, value in config_data['mcp'].items():
+                        setattr(config.mcp, key, value)
+
+                # FIX: Add logging configuration
+                if 'logging' in config_data:
+                    for key, value in config_data['logging'].items():
+                        setattr(config.logging, key, value)
+
+                return config
+
+            except Exception as e:
+                logger.warning(f"Failed to load config.json: {e}, using defaults")
+                return SAMConfig()
+        else:
+            logger.info("No config.json found, using default configuration")
+            return SAMConfig()
+
+    # ===== LLM COMMUNICATION =====
+    def generate_chat_completion(self, messages: List[Dict], **kwargs) -> str:
+        """Generate chat completion using LM Studio API"""
+        if not REQUESTS_AVAILABLE:
+            return "❌ Error: requests library not available"
+
         try:
-            models_url = f"{self.base_url.replace('/v1', '')}/v1/models"
-            response = requests.get(models_url, timeout=10)
+            payload = {
+                "model": self.model_name,
+                "messages": messages,
+                "temperature": kwargs.get("temperature", 0.7),
+                "max_tokens": kwargs.get("max_tokens", 2000),
+                "stream": False
+            }
+
+            response = requests.post(
+                f"{self.base_url}/chat/completions",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=60
+            )
 
             if response.status_code == 200:
-                models_data = response.json()
+                result = response.json()
+                return result["choices"][0]["message"]["content"]
+            else:
+                error_msg = f"API Error {response.status_code}: {response.text}"
+                logger.error(error_msg)
+                return error_msg
 
-                # Find the current model
-                for model in models_data.get('data', []):
-                    if model.get('id') == self.model_name:
-                        loaded_context = model.get('loaded_context_length', self.context_limit)
-                        max_context = model.get('max_context_length', loaded_context)
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Request failed: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+        except Exception as e:
+            error_msg = f"Unexpected error: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
 
-                        logger.info(f"📊 Model: {self.model_name}")
-                        logger.info(f"📊 Loaded context: {loaded_context:,} tokens")
-                        logger.info(f"📊 Max context: {max_context:,} tokens")
+    # ===== MCP (MODEL CONTEXT PROTOCOL) SUPPORT =====
+    async def _auto_connect_mcp_servers(self):
+        """Automatically connect to configured MCP servers"""
+        if not hasattr(self.config, 'mcp') or not self.config.mcp.servers:
+            logger.info("No MCP servers configured for auto-connection")
+            return
 
-                        return {
-                            'model_id': model.get('id'),
-                            'loaded_context_length': loaded_context,
-                            'max_context_length': max_context,
-                            'state': model.get('state', 'unknown')
-                        }
+        # Filter for enabled servers only
+        enabled_servers = {
+            name: config for name, config in self.config.mcp.servers.items()
+            if config.get('enabled', True)  # Default to True if not specified
+        }
 
-            logger.warning(f"⚠️  Could not get model info from {models_url}")
-            return None
+        if not enabled_servers:
+            logger.info("No enabled MCP servers found for auto-connection")
+            return
+
+        logger.info(f"Auto-connecting to {len(enabled_servers)} enabled MCP servers...")
+
+        for server_name, server_config in enabled_servers.items():
+            try:
+                server_type = server_config.get('type', 'stdio')
+                server_path = server_config.get('path', '')
+                headers = server_config.get('headers', {})
+
+                success = await self.connect_to_mcp_server(
+                    server_name=server_name,
+                    server_type=server_type,
+                    server_path_or_url=server_path,
+                    headers=headers
+                )
+
+                if success:
+                    logger.info(f"✅ Connected to MCP server: {server_name}")
+                else:
+                    logger.warning(f"❌ Failed to connect to MCP server: {server_name}")
+
+            except Exception as e:
+                logger.error(f"❌ Error connecting to MCP server {server_name}: {str(e)}")
+
+    async def connect_to_mcp_server(self, server_name: str, server_type: str,
+                                    server_path_or_url: str, headers: Dict[str, str] = None) -> bool:
+        """Connect to an MCP server"""
+        server_type = server_type.lower()
+
+        logger.info(f"Connecting to MCP server: {server_name} ({server_type})")
+
+        try:
+            if server_type == 'stdio':
+                return await self._connect_stdio_mcp(server_name, server_path_or_url)
+            elif server_type == 'websocket':
+                return await self._connect_websocket_mcp(server_name, server_path_or_url, headers)
+            elif server_type in ['http', 'sse']:
+                return await self._connect_http_mcp(server_name, server_path_or_url, headers)
+            else:
+                logger.error(f"Unsupported MCP server type: {server_type}")
+                return False
 
         except Exception as e:
-            logger.warning(f"⚠️  Failed to get model info: {e}")
-            return None
+            logger.error(f"Failed to connect to MCP server {server_name}: {str(e)}")
+            return False
 
-    def _update_context_limit_from_api(self):
-        """Update context limit based on actual loaded model"""
-        model_info = self._get_model_info()
+    async def _connect_stdio_mcp(self, server_name: str, server_path: str) -> bool:
+        """Connect to a stdio MCP server"""
+        try:
+            from mcp import stdio_client
+            from mcp.client.stdio import StdioServerParameters
+        except ImportError:
+            logger.error("MCP client not available. Install with: pip install mcp")
+            return False
 
-        if model_info and model_info.get('loaded_context_length'):
-            old_limit = self.context_limit
-            self.context_limit = model_info['loaded_context_length']
+        if not os.path.exists(server_path):
+            logger.error(f"MCP server script not found at {server_path}")
+            return False
 
-            if old_limit != self.context_limit:
-                logger.info(f"🔄 Updated context limit: {old_limit:,} → {self.context_limit:,} tokens")
-
-            return model_info
-
-        return None
-
-    def switch_provider(self, provider_name: str) -> str:
-        """Switch between providers"""
-        if provider_name not in self.config.get('providers', {}):
-            return f"❌ Provider '{provider_name}' not found in config"
-
-        self.config['provider'] = provider_name
-
-        # Update relevant settings based on provider
-        provider_config = self.config['providers'][provider_name]
-
-        if provider_name == 'claude':
-            self.context_limit = provider_config.get('context_limit', 200000)
-            self.model_name = provider_config.get('model_name', 'claude-3-5-sonnet-20241022')
-        else:
-            # For LMStudio, try to get actual context length
-            if self.config.get('features', {}).get('use_loaded_context_length', True):
-                self._update_context_limit_from_api()
+        try:
+            # Determine command based on script extension
+            if server_path.endswith('.js'):
+                command = "node"
+            elif server_path.endswith('.py'):
+                command = "python" if sys.platform == "win32" else "python3"
             else:
-                self.context_limit = provider_config.get('context_limit', 20000)
-            self.model_name = provider_config.get('model_name', 'qwen2.5-coder-14b-instruct')
+                logger.error(f"Unsupported server script type: {server_path}")
+                return False
 
-            # Update instance variables for LMStudio
-            self.base_url = provider_config.get('base_url', self.base_url)
-            self.api_key = provider_config.get('api_key', self.api_key)
+            server_params = StdioServerParameters(command=command, args=[server_path])
+            session = await stdio_client(server_params)
 
-        return f"✅ Switched to {provider_name} provider (model: {self.model_name}, context: {self.context_limit:,})"
+            self.mcp_sessions[server_name] = session
+            await self._register_mcp_tools(server_name, session)
 
-    def get_current_provider(self) -> str:
-        """Get current provider info"""
-        current = self.config.get('provider', 'unknown')
-        available = list(self.config.get('providers', {}).keys())
-        return f"📋 Current: {current} | Available: {', '.join(available)}"
+            logger.info(f"Successfully connected to stdio MCP server: {server_name}")
+            return True
 
+        except Exception as e:
+            logger.error(f"Failed to connect to stdio MCP server {server_name}: {str(e)}")
+            return False
 
+    async def _connect_websocket_mcp(self, server_name: str, ws_url: str, headers: Dict[str, str] = None) -> bool:
+        """Connect to a WebSocket MCP server"""
+        try:
+            from mcp_transports import WebSocketMCPTransport
+            import websockets
+        except ImportError:
+            logger.error("WebSocket support not available. Install 'websockets' package.")
+            return False
 
-    def _build_system_prompt(self) -> str:
-        """Build the complete system prompt including safety information"""
+        try:
+            connection_kwargs = {'ping_interval': 30, 'ping_timeout': 10, 'close_timeout': 10}
+            if headers:
+                connection_kwargs['additional_headers'] = headers
 
-        # Core identity and capabilities
-        core_prompt = """You are SAM (Semi-Autonomous Model), a highly capable AI agent with access to various tools and capabilities.
+            websocket = await websockets.connect(ws_url, **connection_kwargs)
+            session = WebSocketMCPTransport(websocket, server_name)
+            await session.initialize()
 
-Core Principles:
-- Be helpful, accurate, and efficient
-- Use tools when necessary to accomplish tasks
-- Provide clear, concise responses
-- Ask for clarification when needed
-- Respect user preferences and boundaries
+            self.mcp_sessions[server_name] = session
+            await self._register_mcp_tools(server_name, session)
 
-When using tools:
-1. Consider if the tool is necessary for the task
-2. Use appropriate parameters
-3. Interpret results accurately
-4. Explain what you did and why
+            logger.info(f"Successfully connected to WebSocket MCP server: {server_name}")
+            return True
 
-TOOL USAGE:
-- Available tools will be provided in each message within <available_tools> tags
-- Use tools by formatting calls EXACTLY like this:
+        except Exception as e:
+            logger.error(f"Failed to connect to WebSocket MCP server {server_name}: {str(e)}")
+            return False
 
-```json
-{
-  "name": "tool_name_here",
-  "arguments": {
-      "param1": "value1",
-      "param2": "value2"
-  }
-}
-```
+    async def _connect_http_mcp(self, server_name: str, base_url: str, headers: Dict[str, str] = None) -> bool:
+        """Connect to an HTTP/SSE MCP server"""
+        try:
+            from mcp_transports import StreamableHTTPMCPTransport
+            import httpx
+        except ImportError:
+            logger.error("HTTP support not available. Install 'httpx' package.")
+            return False
 
-Think step-by-step and explain your reasoning before using tools.
+        try:
+            client = httpx.AsyncClient(timeout=httpx.Timeout(30.0), follow_redirects=True)
+            session = StreamableHTTPMCPTransport(client, base_url, server_name, headers)
+            await session.initialize()
 
-IMPORTANT: You're designed to write tool call instructions that are presented to the user for approval. You're not actually performing system actions directly - a script extracts your instructions and presents them to the user for their decision to execute or not."""
+            self.mcp_sessions[server_name] = session
+            await self._register_mcp_tools(server_name, session)
 
-        # Add safety information
-        safety_info = self._build_safety_prompt_section()
+            logger.info(f"Successfully connected to HTTP MCP server: {server_name}")
+            return True
 
-        # Final notes
-        final_notes = """
-Also keep in mind that you are naturally terrible at counting, and math in general. Don't try to do math mentally. Always perform a tool call to verify math using code.
+        except Exception as e:
+            logger.error(f"Failed to connect to HTTP MCP server {server_name}: {str(e)}")
+            return False
 
-One final note: The user can SEE the raw results of your tool calls, so you do not need to repeat the results when the system shows them to you, though feel free to provide a context-appropriate response."""
+    async def _register_mcp_tools(self, server_name: str, session):
+        """Register tools from an MCP server"""
+        try:
+            tools_result = await session.list_tools()
+            if not tools_result or not tools_result.tools:
+                logger.warning(f"No tools found in server: {server_name}")
+                return
 
-        return f"{core_prompt}\n\n{safety_info}\n{final_notes}"
+            for tool in tools_result.tools:
+                tool_info = {
+                    "name": tool.name,
+                    "description": tool.description or "",
+                    "input_schema": getattr(tool, 'input_schema', {}),
+                    "server": server_name
+                }
 
-    def _build_safety_prompt_section(self) -> str:
-        """Build the safety-related section of the system prompt"""
+                self.mcp_tools[tool.name] = (server_name, tool_info)
+                logger.debug(f"Registered MCP tool: {tool.name} from server: {server_name}")
 
-        # Determine current safety state
-        if self.safety_mode and not self.auto_approve:
-            safety_state = "🛡️ SAFETY MODE: ENABLED - User approval required for tool execution"
-            behavior_note = "The user will be prompted to approve each tool call before execution."
-        elif self.safety_mode and self.auto_approve:
-            safety_state = "🛡️ SAFETY MODE: ENABLED but AUTO-APPROVAL is active for this session"
-            behavior_note = "Tools will execute automatically until the session ends or auto-approval is disabled."
-        else:
-            safety_state = "⚡ SAFETY MODE: DISABLED - Tools execute automatically"
-            behavior_note = "Tools will execute immediately without user approval."
+            logger.info(f"Registered {len(tools_result.tools)} tools from server: {server_name}")
 
-        # Count tools that require approval
-        high_risk_tools = [
-            name for name, info in self.tool_info.items()
-            if info.requires_approval
-        ]
+        except Exception as e:
+            logger.error(f"Error registering tools from server {server_name}: {str(e)}")
 
-        tool_safety_info = ""
-        if high_risk_tools:
-            tool_safety_info = f"\n⚠️  HIGH-RISK TOOLS (always require approval): {', '.join(high_risk_tools)}"
+    async def _execute_mcp_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
+        """Execute an MCP tool - THE MISSING METHOD!"""
+        if tool_name not in self.mcp_tools:
+            return f"❌ MCP tool not found: {tool_name}"
 
-        # Build the complete safety section
-        safety_section = f"""
-CURRENT SAFETY STATUS:
-{safety_state}
+        server_name, tool_info = self.mcp_tools[tool_name]
+        session = self.mcp_sessions.get(server_name)
 
-BEHAVIOR: {behavior_note}
+        if not session:
+            return f"❌ MCP server {server_name} is not connected"
 
-SAFETY CONTROLS AVAILABLE TO USER:
-- 'safety on/off' - Enable/disable safety mode
-- 'auto on/off' - Enable/disable auto-approval
-- 'safety' - Check current safety status{tool_safety_info}
+        try:
+            print(f"\n🌐 Executing MCP tool: {tool_name} on server: {server_name}")
+            start_time = time.time()
 
-IMPORTANT: If the user says "safety off" or similar commands, they are changing safety settings, not asking you to execute tools unsafely. Respond with confirmation of the setting change."""
+            # Execute the tool via MCP
+            tool_result = await session.run_tool(tool_name, args)
+            result = tool_result.result
 
-        return safety_section
+            execution_time = time.time() - start_time
+            print(f"✅ MCP tool completed in {execution_time:.3f}s")
 
-    # ===== SAFETY CONTROL METHODS =====
-    def set_safety_mode(self, enabled: Optional[bool] = None) -> str:
-        """Enable, disable, or toggle safety mode"""
-        if enabled is None:
-            self.safety_mode = not self.safety_mode
-        else:
-            self.safety_mode = enabled
+            # Display raw results
+            print(f"\n📊 MCP TOOL RESULTS:")
+            print("=" * 60)
+            print(str(result))
+            print("=" * 60)
 
-        status = "ENABLED" if self.safety_mode else "DISABLED"
-        # Rebuild system prompt with new safety status
-        self.system_prompt = self._build_system_prompt()
-        return f"🛡️ Safety mode {status}"
+            return str(result)
 
-    def set_auto_approve(self, enabled: bool) -> str:
-        """Enable or disable automatic approval of tool calls"""
-        self.auto_approve = enabled
-        status = "ENABLED" if enabled else "DISABLED"
-        # Rebuild system prompt with new safety status
-        self.system_prompt = self._build_system_prompt()
-        return f"🤖 Auto-approval {status}"
+        except Exception as e:
+            error_msg = f"Error executing MCP tool {tool_name}: {str(e)}"
+            logger.error(error_msg)
+            print(f"\n❌ MCP TOOL ERROR:")
+            print("=" * 60)
+            print(error_msg)
+            print("=" * 60)
+            return error_msg
 
+    async def disconnect_mcp_servers(self):
+        """Disconnect from all MCP servers"""
+        for server_name, session in self.mcp_sessions.items():
+            try:
+                await session.close()
+                logger.info(f"Disconnected from MCP server: {server_name}")
+            except Exception as e:
+                logger.error(f"Error disconnecting from server {server_name}: {str(e)}")
+
+        self.mcp_sessions = {}
+        self.mcp_tools = {}
+
+    def list_mcp_servers(self) -> Dict[str, Any]:
+        """List all connected MCP servers"""
+        servers = {}
+        for server_name, session in self.mcp_sessions.items():
+            server_tools = [tool for tool, (srv, _) in self.mcp_tools.items() if srv == server_name]
+            servers[server_name] = {
+                "status": "connected",
+                "tools": server_tools,
+                "tool_count": len(server_tools)
+            }
+        return servers
+
+    # ===== SAFETY AND CONTROL =====
     def get_safety_status(self) -> str:
-        """Get current safety status"""
-        safety_status = "🛡️ ON" if self.safety_mode else "🛡️ OFF"
-        auto_status = "🤖 AUTO" if self.auto_approve else "🤖 MANUAL"
-        return f"Safety: {safety_status} | Approval: {auto_status}"
+        """Get current safety configuration status"""
+        return (f"🛡️ Safety Mode: {'ON' if self.safety_mode else 'OFF'} | "
+                f"🤖 Auto-approve: {'ON' if self.auto_approve else 'OFF'}")
 
-    def get_detailed_safety_status(self) -> Dict[str, any]:
-        """Get detailed safety status information"""
-        high_risk_tools = [
-            name for name, info in self.tool_info.items()
-            if info.requires_approval
-        ]
-
+    def get_detailed_safety_status(self) -> Dict[str, Any]:
+        """Get detailed safety status for API responses"""
         return {
             "safety_mode": self.safety_mode,
             "auto_approve": self.auto_approve,
-            "high_risk_tools": high_risk_tools,
-            "total_tools": len(self.local_tools) + len(self.mcp_tools),
+            "tools_count": len(self.local_tools) + len(self.mcp_tools),
             "local_tools": len(self.local_tools),
-            "mcp_tools": len(self.mcp_tools)
+            "mcp_tools": len(self.mcp_tools),
+            "mcp_servers": len(self.mcp_sessions)
         }
 
-    def _prompt_for_approval(self, tool_name: str, args: Dict, tool_info: ToolInfo = None) -> bool:
-        """Prompt user for tool execution approval with enhanced display"""
-        print("\n" + "=" * 80)
-        print("🛡️  SAM TOOL EXECUTION APPROVAL REQUIRED")
-        print("=" * 80)
-        print(f"🔧 Tool: {tool_name}")
+    def set_safety_mode(self, enabled: bool) -> str:
+        """Enable or disable safety mode"""
+        self.safety_mode = enabled
+        status = "ON" if enabled else "OFF"
+        result = f"🛡️ Safety mode {status}"
+        logger.info(result)
+        return result
 
+    def set_auto_approve(self, enabled: bool) -> str:
+        """Enable or disable auto-approve mode"""
+        self.auto_approve = enabled
+        status = "ON" if enabled else "OFF"
+        result = f"🤖 Auto-approve {status}"
+        logger.info(result)
+        return result
+
+    def _prompt_for_approval(self, tool_name: str, args: Dict[str, Any], tool_info: ToolInfo = None) -> bool:
+        """Prompt user for tool execution approval"""
+        print(f"\n🔍 TOOL APPROVAL REQUIRED")
+        print(f"Tool: {tool_name}")
         if tool_info:
-            print(f"📂 Category: {tool_info.category.value}")
-            print(f"📄 Description: {tool_info.description}")
-            if tool_info.requires_approval:
-                print("⚠️  This tool always requires approval")
-            print(f"📊 Usage count: {tool_info.usage_count}")
-
-        print(f"\n📋 Arguments:")
-        if args:
-            for key, value in args.items():
-                # Truncate long values for display
-                display_value = str(value)
-                if len(display_value) > 100:
-                    display_value = display_value[:100] + "...[truncated]"
-                print(f"  • {key}: {display_value}")
-        else:
-            print("  • No arguments required")
-
-        print(f"\n🎛️  Options:")
-        print("  ✅ y/yes    - Approve this tool call")
-        print("  ❌ n/no     - Deny this tool call")
-        print("  🤖 a/auto   - Approve and enable auto-approval for this session")
-        print("  🛑 s/stop   - Deny and stop execution")
-        print("  ℹ️  i/info   - Show more details about this tool")
+            print(f"Category: {tool_info.category.value}")
+            print(f"Description: {tool_info.description}")
+        print(f"Arguments: {json.dumps(args, indent=2)}")
+        print("\nOptions:")
+        print("  'y' or 'yes' - Execute this tool")
+        print("  'n' or 'no' - Skip this tool")
+        print("  'info' - Show detailed tool information")
+        print("  'stop' - Stop all tool execution for this request")
 
         while True:
             try:
-                response = input(f"\n🛡️  Approve tool execution? [y/n/a/s/i]: ").strip().lower()
+                response = input("🤔 Approve tool execution? (y/n/info/stop): ").strip().lower()
 
                 if response in ['y', 'yes']:
-                    print("✅ Tool approved!")
+                    print("✅ Tool execution approved")
                     return True
                 elif response in ['n', 'no']:
-                    print("❌ Tool denied!")
+                    print("❌ Tool execution denied")
                     return False
-                elif response in ['a', 'auto']:
-                    self.auto_approve = True
-                    # Rebuild system prompt to reflect auto-approval
-                    self.system_prompt = self._build_system_prompt()
-                    print("🤖 Auto-approval enabled for this session")
-                    return True
-                elif response in ['s', 'stop']:
-                    self._handle_stop_request()
-                    self.stop_requested = True
-                    return False
-                elif response in ['i', 'info']:
+                elif response == 'info':
                     self._show_tool_info(tool_name, tool_info)
                     continue
+                elif response == 'stop':
+                    self.request_stop()
+                    return False
                 else:
-                    print("❌ Invalid response. Please enter y/n/a/s/i")
+                    print("Please enter 'y', 'n', 'info', or 'stop'")
 
-            except KeyboardInterrupt:
-                print("\n🛑 Tool execution cancelled by user")
-                return False
-            except EOFError:
-                print("\n❌ Input cancelled")
+            except (EOFError, KeyboardInterrupt):
+                print("\n❌ Tool execution denied (interrupted)")
                 return False
 
-    def _handle_stop_request(self):
-        """Handle user request to stop tool calls"""
-        print("🛑 Tool execution denied. Requesting SAM to stop proposing tool calls.")
+    def request_stop(self) -> str:
+        """Request SAM to stop executing tools"""
+        self.stop_requested = True
+        logger.info("Stop requested - SAM will cease tool execution")
+        print("🛑 Stop requested. Requesting SAM to stop proposing tool calls.")
         self.stop_message = (
             "<platform_message>"
             "TOOL EXECUTION FOR THIS REQUEST HAS BEEN TERMINATED BY THE USER. "
@@ -609,23 +706,41 @@ IMPORTANT: If the user says "safety off" or similar commands, they are changing 
 
             parameters[param_name] = param_info
 
-        # Store tool information
-        self.tool_info[func_name] = ToolInfo(
-            function=function,
-            description=doc,
-            parameters=parameters,
-            category=category,
-            requires_approval=requires_approval
-        )
+        try:
+            # Store tool information
+            self.tool_info[func_name] = ToolInfo(
+                function=function,
+                description=doc,
+                parameters=parameters,
+                category=category,
+                requires_approval=requires_approval
+            )
 
-        # Store callable function
-        self.local_tools[func_name] = {
-            "function": function,
-            "category": category.value,
-            "requires_approval": requires_approval
-        }
+            # Store callable function
+            self.local_tools[func_name] = {
+                "function": function,
+                "category": category.value,
+                "requires_approval": requires_approval
+            }
 
-        logger.info(f"Registered local tool: {func_name} ({category.value})")
+            # Add to category tracking
+            if category not in self.tools_by_category:
+                self.tools_by_category[category] = []
+            self.tools_by_category[category].append(func_name)
+
+            logger.info(f"Registered local tool: {func_name} ({category.value})")
+
+        except Exception as e:
+            logger.error(f"Failed to register tool {func_name}: {str(e)}")
+            print(f"❌ Failed to register tool {func_name}: {str(e)}")
+
+    def get_tools_by_category(self, category: ToolCategory) -> List[str]:
+        """Get all tools in a specific category"""
+        return self.tools_by_category[category].copy()
+
+    def get_tool_categories(self) -> List[ToolCategory]:
+        """Get all categories that have tools"""
+        return list(self.tools_by_category.keys())
 
     # ===== TOOL EXECUTION WITH SAFETY =====
     async def _execute_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
@@ -675,7 +790,7 @@ IMPORTANT: If the user says "safety off" or similar commands, they are changing 
                 return str(result)
 
             elif tool_name in self.mcp_tools:
-                # Execute MCP tool (implementation depends on your MCP setup)
+                # Execute MCP tool
                 return await self._execute_mcp_tool(tool_name, args)
             else:
                 return f"❌ Unknown tool: {tool_name}"
@@ -689,118 +804,17 @@ IMPORTANT: If the user says "safety off" or similar commands, they are changing 
             print("=" * 60)
             return error_msg
 
-    # ===== LLM COMMUNICATION =====
-    def generate_chat_completion(self, messages: List[Dict]) -> str:
-        """Generate chat completion using the configured provider"""
-        provider = self.config.get('provider', 'lmstudio')
-
-        if provider == 'claude':
-            return self._generate_claude_completion(messages)
-        else:
-            return self._generate_lmstudio_completion(messages)
-
-    def _generate_claude_completion(self, messages: List[Dict]) -> str:
-        """Generate completion using Claude API"""
-        try:
-            # Import anthropic here to avoid dependency issues
-            try:
-                import anthropic
-            except ImportError:
-                return "Error: anthropic package not installed. Run: pip install anthropic"
-
-            # Get Claude config
-            claude_config = self.config.get('providers', {}).get('claude', {})
-            api_key = claude_config.get('api_key')
-
-            # Handle environment variable substitution
-            if api_key and api_key.startswith('${') and api_key.endswith('}'):
-                env_var = api_key[2:-1]  # Remove ${ and }
-                api_key = os.environ.get(env_var)
-
-            if not api_key:
-                return "Error: ANTHROPIC_API_KEY not found in environment or config"
-
-            # Create client
-            client = anthropic.Anthropic(api_key=api_key)
-
-            # Prepare parameters
-            model = claude_config.get('model_name', 'claude-3-5-sonnet-20241022')
-            final_max_tokens = 4000
-            final_temperature = self.temperature
-
-            # Convert messages to Claude format
-            claude_messages = []
-            system_content = ""
-
-            for msg in messages:
-                if msg['role'] == 'system':
-                    system_content += msg['content'] + "\n"
-                else:
-                    claude_messages.append(msg)
-
-            # Create message with system prompt
-            response = client.messages.create(
-                model=model,
-                max_tokens=final_max_tokens,
-                temperature=final_temperature,
-                system=system_content.strip() if system_content else None,
-                messages=claude_messages
-            )
-
-            # Extract text response
-            response_text = ""
-            for content_block in response.content:
-                if hasattr(content_block, 'text'):
-                    response_text += content_block.text
-
-            return response_text.strip()
-
-        except Exception as e:
-            logger.error(f"Claude API error: {e}")
-            return f"Error calling Claude API: {str(e)}"
-
-    def _generate_lmstudio_completion(self, messages: List[Dict]) -> str:
-        """Generate completion using LMStudio API (your existing logic)"""
-        try:
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-
-            payload = {
-                "model": self.model_name,
-                "messages": messages,
-                "temperature": self.temperature,
-                "max_tokens": -1,
-                "stream": False
-            }
-
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=60
-            )
-
-            if response.status_code == 200:
-                result = response.json()
-                return result['choices'][0]['message']['content']
-            else:
-                logger.error(f"API Error: {response.status_code} - {response.text}")
-                return f"Error: API request failed with status {response.status_code}"
-
-        except Exception as e:
-            logger.error(f"LLM API Error: {str(e)}")
-            return f"Error communicating with LLM: {str(e)}"
-
-    def _extract_tool_calls(self, text: str) -> List[Dict]:
-        """Extract tool calls from LLM response - supports multiple JSON formats"""
+    def _extract_tool_calls(self, text: str) -> List[Dict[str, Any]]:
+        """Extract tool calls from LLM response"""
         tool_calls = []
-        seen_calls = set()  # Track seen tool calls to avoid duplicates
+        seen_calls = set()
 
-        # Patterns for finding JSON tool calls in various formats
+        # Multiple patterns to catch different JSON formatting
         patterns = [
-            r'```json\s*(.*?)\s*```',  # Standard code blocks
+            r'```json\s*(.*?)```',  # Standard JSON blocks
+            r'```\s*(\{.*?"name".*?\})\s*```',  # General code blocks with JSON
+            r'(\{[^{}]*"name"[^{}]*\})',  # Inline JSON objects
+            r'```(?:python)?\s*(.*?)```',  # Python code blocks that might contain tool calls
             r'```(?:json)?\s*(.*?)```',  # Code blocks without explicit json
         ]
 
@@ -833,9 +847,12 @@ IMPORTANT: If the user says "safety off" or similar commands, they are changing 
         return tool_calls
 
     async def run(self, user_input: str, max_iterations: int = 5,
-                  verbose: bool = False) -> str:  # Reduced max iterations
+                  verbose: bool = False) -> str:
         """Main execution loop with safety controls"""
         try:
+            # Ensure MCP auto-connection happens on first run
+            await self._ensure_mcp_auto_connect()
+
             # Handle safety commands first
             safety_commands = {
                 'safety': self.get_safety_status,
@@ -871,73 +888,103 @@ IMPORTANT: If the user says "safety off" or similar commands, they are changing 
 
                 # Prepare messages for LLM
                 messages = [
-                               {"role": "system", "content": self.system_prompt + tools_context}
-                           ] + self.conversation_history
-
-                # Add stop message if user requested stop
-                if self.stop_message:
-                    messages.append({
+                    {
                         "role": "system",
-                        "content": self.stop_message
-                    })
+                        "content": f"""You are SAM (Semi-Autonomous Model), an AI assistant with access to tools for various tasks.
 
-                # Get LLM response
+    CRITICAL TOOL USAGE INSTRUCTIONS:
+    - When you need to use a tool, respond with a JSON object in this EXACT format:
+    {{"name": "tool_name", "arguments": {{"param1": "value1", "param2": "value2"}}}}
+    - Put the JSON in a code block with ```json
+    - Use tools whenever they would be helpful for the user's request
+    - Always provide the tool call first, then explain what you're doing
+    - For multiple tools, use separate JSON objects in separate code blocks
+
+    {tools_context}
+
+    Current safety settings: {self.get_safety_status()}
+    {self.stop_message}"""
+                    }
+                ]
+
+                # Add conversation history
+                messages.extend(self.conversation_history)
+
                 if verbose:
-                    print("🤖 SAM is thinking...")
+                    print(f"📊 {self._get_context_status()}")
 
-                assistant_response = self.generate_chat_completion(messages)
-                last_response = assistant_response
+                # Generate response
+                response = self.generate_chat_completion(messages)
+                last_response = response
 
-                # Add assistant response to conversation
-                self.conversation_history.append({
-                    "role": "assistant",
-                    "content": assistant_response
-                })
+                if verbose:
+                    print(f"\n🤖 Raw LLM Response:")
+                    print(response)
+
+                # Check for stop condition
+                if self.stop_requested:
+                    break
 
                 # Extract and execute tool calls
-                tool_calls = self._extract_tool_calls(assistant_response)
+                tool_calls = self._extract_tool_calls(response)
 
                 if not tool_calls:
-                    # No tools to execute, return final response
-                    return assistant_response
+                    # No tools to execute, add response and finish
+                    self.conversation_history.append({
+                        "role": "assistant",
+                        "content": response
+                    })
+                    break
 
-                # Limit total tool calls to prevent runaway execution
-                if tool_call_count >= 10:
-                    return f"{last_response}\n\n⚠️ Maximum tool execution limit reached. Stopping to prevent runaway execution."
-
-                # Execute tools and collect results
+                # Execute tools
                 tool_results = []
                 for tool_call in tool_calls:
                     if self.stop_requested:
                         break
 
-                    tool_name = tool_call.get('name', '')
-                    tool_args = tool_call.get('arguments', {})
+                    tool_name = tool_call.get("name", "")
+                    tool_args = tool_call.get("arguments", {})
 
                     if verbose:
-                        print(f"🔧 Executing: {tool_name}")
+                        print(f"\n🔧 Executing: {tool_name}")
 
-                    result = await self._execute_tool(tool_name, tool_args)
-                    tool_results.append(f"Tool '{tool_name}' result: {result}")
-                    tool_call_count += 1
+                    try:
+                        result = await self._execute_tool(tool_name, tool_args)
+                        tool_results.append(f"Tool {tool_name} result: {result}")
+                        tool_call_count += 1
 
-                # Add tool results to conversation
+                        # Safety limit on tool calls
+                        if tool_call_count >= 10:
+                            tool_results.append("⚠️ Maximum tool call limit reached for this request")
+                            break
+
+                    except Exception as e:
+                        error_msg = f"Tool {tool_name} failed: {str(e)}"
+                        tool_results.append(error_msg)
+                        logger.error(error_msg)
+
+                # Add assistant response with tool results
+                combined_response = response
                 if tool_results:
-                    tool_results_message = "Tool execution results:\n" + "\n".join(tool_results)
-                    self.conversation_history.append({
-                        "role": "user",
-                        "content": tool_results_message
-                    })
+                    combined_response += "\n\nTool Results:\n" + "\n".join(tool_results)
 
-                # If user requested stop, return appropriate message
-                if self.stop_requested:
-                    return "🛑 Tool execution stopped by user request."
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": combined_response
+                })
 
-            return f"{last_response}\n\n🔄 Maximum iterations reached."
+                # If we executed tools, continue to next iteration for follow-up
+                if tool_results and not self.stop_requested:
+                    continue
+                else:
+                    break
+
+            return last_response
 
         except Exception as e:
             logger.error(f"Error in run: {str(e)}")
             return f"❌ Error: {str(e)}"
+
 
     def _build_tools_context(self) -> str:
         """Build the available tools context for the LLM"""
@@ -954,25 +1001,67 @@ IMPORTANT: If the user says "safety off" or similar commands, they are changing 
             else:
                 tools_list.append(f"- {tool_name}: {tool_data.get('category', 'unknown')}")
 
-        # Add MCP tools
-        for tool_name in self.mcp_tools:
-            tools_list.append(f"- {tool_name}: MCP tool")
+        # Add MCP tools with server information
+        for tool_name, (server_name, tool_info) in self.mcp_tools.items():
+            description = tool_info.get('description', 'MCP tool')
+            tools_list.append(f"- {tool_name}: {description} (MCP Server: {server_name})")
 
         tools_context = f"""
-
-<available_tools>
-Available tools ({len(tools_list)} total):
-{chr(10).join(tools_list)}
-</available_tools>"""
+    
+    <available_tools>
+    Available tools ({len(tools_list)} total):
+    {chr(10).join(tools_list)}
+    
+    Local tools: {len(self.local_tools)}
+    MCP tools: {len(self.mcp_tools)} from {len(self.mcp_sessions)} servers
+    </available_tools>"""
 
         return tools_context
 
+
+    def _estimate_token_count(self, text: str) -> int:
+        """Rough token count estimation"""
+        return len(text) // 4
+
+
+    def _get_context_status(self) -> str:
+        """Get current context usage status"""
+        total_tokens = 0
+        message_breakdown = {"system": 0, "user": 0, "assistant": 0}
+
+        for msg in self.conversation_history:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            tokens = self._estimate_token_count(content)
+            total_tokens += tokens
+
+            if role in message_breakdown:
+                message_breakdown[role] += tokens
+
+        percent_used = (total_tokens / self.context_limit) * 100
+
+        warning = ""
+        if percent_used > 90:
+            warning = "⚠️ CRITICAL: Context nearly full!"
+        elif percent_used > 75:
+            warning = "⚠️ WARNING: Context usage high"
+
+        return (
+            f"CONTEXT STATUS: ~{total_tokens:,} tokens used (~{percent_used:.1f}% of {self.context_limit:,}). "
+            f"Messages: {len(self.conversation_history)} "
+            f"Tools: {len(self.local_tools)} local, {len(self.mcp_tools)} MCP. "
+            f"{warning}"
+        )
+
+
     def list_tools(self) -> Dict[str, Any]:
         """List all available tools"""
-        tools = {}
+        local_tools = {}
+        mcp_tools = {}
 
+        # Local tools
         for tool_name, tool_info in self.tool_info.items():
-            tools[tool_name] = {
+            local_tools[tool_name] = {
                 "description": tool_info.description,
                 "category": tool_info.category.value,
                 "requires_approval": tool_info.requires_approval,
@@ -980,10 +1069,20 @@ Available tools ({len(tools_list)} total):
                 "parameters": tool_info.parameters
             }
 
+        # MCP tools
+        for tool_name, (server_name, tool_info) in self.mcp_tools.items():
+            mcp_tools[tool_name] = {
+                "description": tool_info.get('description', ''),
+                "server": server_name,
+                "input_schema": tool_info.get('input_schema', {}),
+                "category": "mcp"
+            }
+
         return {
-            "local_tools": tools,
-            "mcp_tools": list(self.mcp_tools.keys()),
-            "total_count": len(tools) + len(self.mcp_tools)
+            "local_tools": local_tools,
+            "mcp_tools": mcp_tools,
+            "mcp_servers": self.list_mcp_servers(),
+            "total_count": len(local_tools) + len(mcp_tools)
         }
 
 
@@ -1000,6 +1099,13 @@ def main():
         plugin_path = Path(__file__).parent / "plugins" / "core_tools.py"
         if sam.plugin_manager.load_plugin_from_file(str(plugin_path)):
             print("✅ Core tools plugin loaded successfully!")
+
+            # IMPORTANT: Register the tools with SAM
+            core_plugin = sam.plugin_manager.plugins.get("Core Tools")
+            if core_plugin:
+                core_plugin.register_tools(sam)
+                print(f"🔧 Registered {len(sam.local_tools)} tools from Core Tools plugin")
+
         else:
             print("❌ Failed to load core tools plugin")
     except Exception as e:
@@ -1019,13 +1125,14 @@ def main():
     except Exception as e:
         print(f"❌ API connection failed: {e}")
 
-    # Display capabilities using the tools_info
+    # Display capabilities
     tools_info = sam.list_tools()
     print(f"\n=== 🤖 SAM CAPABILITIES ===")
     print(f"🤖 Model: {sam.model_name}")
     print(f"🧠 Context: {sam.context_limit:,} tokens")
     print(f"🔧 Local tools: {len(sam.local_tools)}")
     print(f"🌐 MCP tools: {len(sam.mcp_tools)}")
+    print(f"📡 MCP servers: {len(sam.mcp_sessions)}")
     print(f"🔌 Plugins: {len(sam.plugin_manager.plugins)}")
     print(f"🛡️ Safety mode: {'ON' if sam.safety_mode else 'OFF'}")
     print(f"🤖 Auto-approve: {'ON' if sam.auto_approve else 'OFF'}")
@@ -1034,8 +1141,8 @@ def main():
     print(f"\n=== 🤖 SAM Agent Interactive Mode ===")
     print("Type 'exit' to quit, 'tools' to list available tools")
     print("Commands: 'debug' (toggle debug), 'reset' (clear history), 'tools' (list tools)")
-    print("Providers: 'provider claude/lmstudio', 'providers' (list available)")
     print("Safety: 'safety on/off', 'auto on/off', 'safety' (status)")
+    print("MCP Commands: 'mcp servers', 'mcp connect <server>', 'mcp disconnect <server>'")
 
     debug_mode = False
 
@@ -1050,21 +1157,27 @@ def main():
 
             if user_input.lower() in ['exit', 'quit', 'bye']:
                 print("👋 Goodbye!")
+                # Clean up MCP connections
+                asyncio.run(sam.disconnect_mcp_servers())
                 break
+
             elif user_input.lower() == 'debug':
                 debug_mode = not debug_mode
                 print(f"🐛 Debug mode: {'ON' if debug_mode else 'OFF'}")
                 continue
+
             elif user_input.lower() == 'reset':
                 sam.conversation_history = []
                 print("🔄 Conversation history cleared")
                 continue
+
             elif user_input.lower() == 'tools':
-                # Use the tools_info variable here, but refresh it to get current usage counts
+                # List tools with current usage counts
                 current_tools = sam.list_tools()
-                total_count = len(current_tools.get('local_tools', {})) + len(current_tools.get('mcp_tools', []))
+                total_count = len(current_tools.get('local_tools', {})) + len(current_tools.get('mcp_tools', {}))
                 print(f"\n🔧 Available Tools ({total_count} total):")
 
+                # Local tools
                 for name, info in current_tools.get('local_tools', {}).items():
                     approval = "🛡️" if info.get('requires_approval', False) else "✅"
                     usage = info.get('usage_count', 0)
@@ -1072,24 +1185,82 @@ def main():
                     print(
                         f"  {approval} {name}: {info.get('description', 'No description')} ({info.get('category', 'unknown')}){usage_text}")
 
+                # MCP tools
                 if current_tools.get('mcp_tools'):
-                    print(f"🌐 MCP Tools: {', '.join(current_tools['mcp_tools'])}")
+                    print(f"\n🌐 MCP Tools:")
+                    for name, info in current_tools.get('mcp_tools', {}).items():
+                        server = info.get('server', 'unknown')
+                        description = info.get('description', 'No description')
+                        print(f"  🌐 {name}: {description} (Server: {server})")
                 continue
 
-            # Add this after the existing command handling in the main() while loop
-            elif user_input.lower().startswith('provider '):
-                provider_name = user_input.split(' ', 1)[1].strip()
-                result = sam.switch_provider(provider_name)
-                print(result)
-                continue
-            elif user_input.lower() == 'providers':
-                result = sam.get_current_provider()
-                print(result)
-                continue
+            # Handle MCP-specific commands
+            elif user_input.lower().startswith('mcp '):
+                mcp_command = user_input[4:].strip()
+
+                if mcp_command == 'servers':
+                    servers = sam.list_mcp_servers()
+                    if servers:
+                        print(f"\n🌐 Connected MCP Servers ({len(servers)}):")
+                        for name, info in servers.items():
+                            print(f"  📡 {name}: {info['tool_count']} tools")
+                            for tool in info['tools']:
+                                print(f"    - {tool}")
+                    else:
+                        print("🌐 No MCP servers connected")
+                    continue
+
+                elif mcp_command.startswith('connect '):
+                    server_name = mcp_command[8:].strip()
+                    if hasattr(sam.config, 'mcp') and sam.config.mcp.servers and server_name in sam.config.mcp.servers:
+                        server_config = sam.config.mcp.servers[server_name]
+                        result = asyncio.run(sam.connect_to_mcp_server(
+                            server_name=server_name,
+                            server_type=server_config.get('type', 'stdio'),
+                            server_path_or_url=server_config.get('path', ''),
+                            headers=server_config.get('headers', {})
+                        ))
+                        if result:
+                            print(f"✅ Connected to MCP server: {server_name}")
+                        else:
+                            print(f"❌ Failed to connect to MCP server: {server_name}")
+                    else:
+                        print(f"❌ Server '{server_name}' not found in configuration")
+                    continue
+
+                elif mcp_command.startswith('disconnect '):
+                    server_name = mcp_command[11:].strip()
+                    if server_name in sam.mcp_sessions:
+                        session = sam.mcp_sessions[server_name]
+                        asyncio.run(session.close())
+                        del sam.mcp_sessions[server_name]
+                        # Remove tools from this server
+                        tools_to_remove = [tool for tool, (srv, _) in sam.mcp_tools.items() if srv == server_name]
+                        for tool in tools_to_remove:
+                            del sam.mcp_tools[tool]
+                        print(f"✅ Disconnected from MCP server: {server_name}")
+                    else:
+                        print(f"❌ Server '{server_name}' is not connected")
+                    continue
+
+            # Handle safety commands
+            elif user_input.lower().startswith('safety'):
+                safety_commands = {
+                    'safety': sam.get_safety_status,
+                    'safety on': lambda: sam.set_safety_mode(True),
+                    'safety off': lambda: sam.set_safety_mode(False),
+                    'auto on': lambda: sam.set_auto_approve(True),
+                    'auto off': lambda: sam.set_auto_approve(False),
+                }
+
+                if user_input.lower() in safety_commands:
+                    result = safety_commands[user_input.lower()]()
+                    print(result)
+                    continue
 
             print("🤖 SAM is thinking...")
 
-            # Run SAM with the user input
+            # Run SAM with the user input (async)
             response = asyncio.run(sam.run(user_input, verbose=debug_mode))
 
             # Add spacing and format the response properly
@@ -1097,15 +1268,13 @@ def main():
 
         except KeyboardInterrupt:
             print("\n\n👋 Goodbye!")
+            asyncio.run(sam.disconnect_mcp_servers())
             break
         except Exception as e:
             print(f"\n❌ Error: {str(e)}")
             if debug_mode:
                 traceback.print_exc()
 
-
-if __name__ == "__main__":
-    main()
 
 # ===== API SERVER (if FastAPI available) =====
 if FASTAPI_AVAILABLE:
@@ -1118,7 +1287,7 @@ if FASTAPI_AVAILABLE:
             self.port = port
             self.app = FastAPI(
                 title="SAM Agent API",
-                description="Semi-Autonomous Model API with Safety Controls",
+                description="Semi-Autonomous Model API with Safety Controls and MCP Support",
                 version="1.0.0"
             )
             self.start_time = time.time()
@@ -1147,18 +1316,18 @@ if FASTAPI_AVAILABLE:
 
                     return QueryResponse(
                         response=response,
-                        session_id=request.session_id,
+                        session_id=request.session_id or "default",
                         status="success",
-                        timestamp=datetime.now().isoformat()
+                        timestamp=time.strftime("%Y-%m-%d %H:%M:%S")
                     )
 
                 except Exception as e:
                     logger.error(f"API Error: {str(e)}")
                     return QueryResponse(
                         response="",
-                        session_id=request.session_id,
+                        session_id=request.session_id or "default",
                         status="error",
-                        timestamp=datetime.now().isoformat(),
+                        timestamp=time.strftime("%Y-%m-%d %H:%M:%S"),
                         error=str(e)
                     )
 
@@ -1175,6 +1344,15 @@ if FASTAPI_AVAILABLE:
             @self.app.get("/tools")
             async def list_tools():
                 return self.sam_agent.list_tools()
+
+            @self.app.get("/mcp/servers")
+            async def list_mcp_servers():
+                return self.sam_agent.list_mcp_servers()
+
+            @self.app.post("/mcp/connect")
+            async def connect_mcp_server(server_name: str, server_type: str, server_url: str):
+                success = await self.sam_agent.connect_to_mcp_server(server_name, server_type, server_url)
+                return {"success": success, "server": server_name}
 
             @self.app.post("/execute-tool", response_model=ToolExecutionResponse)
             async def execute_tool_direct(request: ToolExecutionRequest):
@@ -1218,6 +1396,7 @@ if FASTAPI_AVAILABLE:
             import uvicorn
             uvicorn.run(self.app, host=self.host, port=self.port)
 
+
     def run_api_server():
         """Start SAM as an API server"""
         print("🌐 Starting SAM API Server...")
@@ -1243,3 +1422,6 @@ if FASTAPI_AVAILABLE:
 else:
     def run_api_server():
         print("❌ FastAPI not available. Install with: pip install fastapi uvicorn")
+
+if __name__ == "__main__":
+    main()
