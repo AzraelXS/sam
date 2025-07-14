@@ -189,10 +189,12 @@ class SAMAgent:
         self._configure_logging()
 
         # Model configuration - use provider-aware logic
+        # Model configuration - use provider-aware logic
         provider = self.raw_config.get('provider', 'lmstudio')
         if provider == 'claude':
             provider_config = self.raw_config.get('providers', {}).get('claude', {})
             self.base_url = "https://api.anthropic.com/v1"
+            self.api_key = provider_config.get('api_key', '')  # ADD THIS LINE
             self.model_name = model_name or provider_config.get('model_name', 'claude-sonnet-4-20250514')
             self.context_limit = context_limit or provider_config.get('context_limit', 200000)
         else:
@@ -201,6 +203,7 @@ class SAMAgent:
             model_config = self.raw_config.get('model', {})
 
             self.base_url = self.config.lmstudio.base_url
+            self.api_key = lmstudio_config.get('api_key', self.config.lmstudio.api_key)  # ADD THIS LINE
             # Try multiple possible locations for model name
             self.model_name = (model_name or
                                lmstudio_config.get('model_name') or
@@ -249,11 +252,19 @@ class SAMAgent:
             self.model_name = provider_config.get('model_name', 'claude-sonnet-4-20250514')
             # Claude doesn't need base_url update since it's handled in the completion method
         else:
-            # For LMStudio, try to get actual context length
+            # For LMStudio, first set the fallback context limit from config
+            # Try provider config first, then model config
+            fallback_context = (provider_config.get('context_limit') or
+                                self.raw_config.get('model', {}).get('context_limit', 20000))
+            self.context_limit = fallback_context
+
+            # Try to get actual context length from API if enabled
             if self.raw_config.get('features', {}).get('use_loaded_context_length', True):
-                self._update_context_limit_from_api()
-            else:
-                self.context_limit = provider_config.get('context_limit', 20000)
+                model_info = self._update_context_limit_from_api()
+                if not model_info:
+                    # If API query failed, keep the fallback value
+                    logger.info(f"📊 Using configured context limit: {self.context_limit:,} tokens")
+
             self.model_name = provider_config.get('model_name', 'qwen2.5-coder-14b-instruct')
 
             # Update instance variables for LMStudio
@@ -270,36 +281,53 @@ class SAMAgent:
 
     def _get_model_info(self):
         """Get model information from LMStudio API including loaded context length"""
-        try:
-            models_url = f"{self.base_url.replace('/v1', '')}/v1/models"
-            response = requests.get(models_url, timeout=10)
+        # List of endpoints to try
+        endpoints_to_try = [
+            f"{self.base_url.replace('/v1', '')}/v1/models",  # OpenAI-compatible
+            f"{self.base_url.replace('/v1', '')}/api/v0/models"  # LMStudio REST API
+        ]
 
-            if response.status_code == 200:
-                models_data = response.json()
+        for endpoint_url in endpoints_to_try:
+            try:
+                response = requests.get(endpoint_url, timeout=10)
 
-                # Find the current model
-                for model in models_data.get('data', []):
-                    if model.get('id') == self.model_name:
-                        loaded_context = model.get('loaded_context_length', self.context_limit)
-                        max_context = model.get('max_context_length', loaded_context)
+                if response.status_code == 200:
+                    models_data = response.json()
+                    logger.info(f"✅ Successfully connected to {endpoint_url}")
 
-                        logger.info(f"📊 Model: {self.model_name}")
-                        logger.info(f"📊 Loaded context: {loaded_context:,} tokens")
-                        logger.info(f"📊 Max context: {max_context:,} tokens")
+                    # Handle different response formats
+                    models_list = models_data.get('data', models_data if isinstance(models_data, list) else [])
 
-                        return {
-                            'model_id': model.get('id'),
-                            'loaded_context_length': loaded_context,
-                            'max_context_length': max_context,
-                            'state': model.get('state', 'unknown')
-                        }
+                    # Find the current model
+                    for model in models_list:
+                        if model.get('id') == self.model_name:
+                            loaded_context = model.get('loaded_context_length', self.context_limit)
+                            max_context = model.get('max_context_length', loaded_context)
 
-            logger.warning(f"⚠️  Could not get model info from {models_url}")
-            return None
+                            logger.info(f"📊 Model: {self.model_name}")
+                            logger.info(f"📊 Loaded context: {loaded_context:,} tokens")
+                            logger.info(f"📊 Max context: {max_context:,} tokens")
 
-        except Exception as e:
-            logger.warning(f"⚠️  Failed to get model info: {e}")
-            return None
+                            return {
+                                'model_id': model.get('id'),
+                                'loaded_context_length': loaded_context,
+                                'max_context_length': max_context,
+                                'state': model.get('state', 'unknown')
+                            }
+
+                    # If we got a successful response but couldn't find the specific model
+                    logger.info(f"📊 Connected to endpoint but model '{self.model_name}' not found in list")
+                    return None
+                else:
+                    logger.debug(f"Endpoint {endpoint_url} returned status {response.status_code}")
+
+            except Exception as e:
+                logger.debug(f"Failed to connect to {endpoint_url}: {e}")
+                continue
+
+        # If we get here, none of the endpoints worked
+        logger.warning(f"⚠️  Could not get model info from any endpoint")
+        return None
 
     def _update_context_limit_from_api(self):
         """Update context limit based on actual loaded model"""
