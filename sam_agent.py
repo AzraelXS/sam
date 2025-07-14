@@ -181,13 +181,32 @@ class SAMAgent:
         # Load configuration
         self.config = self._load_config()
 
+        # Store raw config for provider operations
+        if not hasattr(self, 'raw_config'):
+            self.raw_config = {}
+
         # Configure logging based on config
         self._configure_logging()
 
-        # Model configuration
-        self.base_url = self.config.lmstudio.base_url
-        self.model_name = model_name or self.config.model.name
-        self.context_limit = context_limit or self.config.model.context_limit
+        # Model configuration - use provider-aware logic
+        provider = self.raw_config.get('provider', 'lmstudio')
+        if provider == 'claude':
+            provider_config = self.raw_config.get('providers', {}).get('claude', {})
+            self.base_url = "https://api.anthropic.com/v1"
+            self.model_name = model_name or provider_config.get('model_name', 'claude-sonnet-4-20250514')
+            self.context_limit = context_limit or provider_config.get('context_limit', 200000)
+        else:
+            # For LMStudio, prefer the provider-specific config, then fall back to model section
+            lmstudio_config = self.raw_config.get('providers', {}).get('lmstudio', {})
+            model_config = self.raw_config.get('model', {})
+
+            self.base_url = self.config.lmstudio.base_url
+            # Try multiple possible locations for model name
+            self.model_name = (model_name or
+                               lmstudio_config.get('model_name') or
+                               model_config.get('name') or
+                               'qwen2.5-coder-14b-instruct')
+            self.context_limit = context_limit or model_config.get('context_limit', 20000)
 
         # Agent state
         self.conversation_history = []
@@ -197,14 +216,14 @@ class SAMAgent:
         self.stop_message = ""
 
         # Tool management
-        self.local_tools = {}  # tool_name -> {"function": func, "category": str, "requires_approval": bool}
-        self.tool_info = {}  # tool_name -> ToolInfo object
+        self.local_tools = {}
+        self.tool_info = {}
         self.tools_by_category = {category: [] for category in ToolCategory}
 
         # MCP (Model Context Protocol) support
-        self.mcp_sessions = {}  # server_name -> session
-        self.mcp_tools = {}  # tool_name -> (server_name, tool_info)
-        self._mcp_auto_connect_pending = True  # Flag to trigger auto-connect when event loop starts
+        self.mcp_sessions = {}
+        self.mcp_tools = {}
+        self._mcp_auto_connect_pending = True
 
         # Plugin system
         self.plugin_manager = PluginManager()
@@ -214,6 +233,88 @@ class SAMAgent:
         logger.info(f"Safety mode: {'ON' if self.safety_mode else 'OFF'}")
 
         # Note: MCP auto-connection will happen when run() is first called
+
+    def switch_provider(self, provider_name: str) -> str:
+        """Switch between providers"""
+        if provider_name not in self.raw_config.get('providers', {}):
+            return f"❌ Provider '{provider_name}' not found in config"
+
+        self.raw_config['provider'] = provider_name
+
+        # Update relevant settings based on provider
+        provider_config = self.raw_config['providers'][provider_name]
+
+        if provider_name == 'claude':
+            self.context_limit = provider_config.get('context_limit', 200000)
+            self.model_name = provider_config.get('model_name', 'claude-sonnet-4-20250514')
+            # Claude doesn't need base_url update since it's handled in the completion method
+        else:
+            # For LMStudio, try to get actual context length
+            if self.raw_config.get('features', {}).get('use_loaded_context_length', True):
+                self._update_context_limit_from_api()
+            else:
+                self.context_limit = provider_config.get('context_limit', 20000)
+            self.model_name = provider_config.get('model_name', 'qwen2.5-coder-14b-instruct')
+
+            # Update instance variables for LMStudio
+            self.base_url = provider_config.get('base_url', self.base_url)
+            self.api_key = provider_config.get('api_key', self.api_key)
+
+        return f"✅ Switched to {provider_name} provider (model: {self.model_name}, context: {self.context_limit:,})"
+
+    def get_current_provider(self) -> str:
+        """Get current provider info"""
+        current = self.raw_config.get('provider', 'lmstudio')  # default to lmstudio
+        available = list(self.raw_config.get('providers', {}).keys())
+        return f"📋 Current: {current} | Available: {', '.join(available)}"
+
+    def _get_model_info(self):
+        """Get model information from LMStudio API including loaded context length"""
+        try:
+            models_url = f"{self.base_url.replace('/v1', '')}/v1/models"
+            response = requests.get(models_url, timeout=10)
+
+            if response.status_code == 200:
+                models_data = response.json()
+
+                # Find the current model
+                for model in models_data.get('data', []):
+                    if model.get('id') == self.model_name:
+                        loaded_context = model.get('loaded_context_length', self.context_limit)
+                        max_context = model.get('max_context_length', loaded_context)
+
+                        logger.info(f"📊 Model: {self.model_name}")
+                        logger.info(f"📊 Loaded context: {loaded_context:,} tokens")
+                        logger.info(f"📊 Max context: {max_context:,} tokens")
+
+                        return {
+                            'model_id': model.get('id'),
+                            'loaded_context_length': loaded_context,
+                            'max_context_length': max_context,
+                            'state': model.get('state', 'unknown')
+                        }
+
+            logger.warning(f"⚠️  Could not get model info from {models_url}")
+            return None
+
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to get model info: {e}")
+            return None
+
+    def _update_context_limit_from_api(self):
+        """Update context limit based on actual loaded model"""
+        model_info = self._get_model_info()
+
+        if model_info and model_info.get('loaded_context_length'):
+            old_limit = self.context_limit
+            self.context_limit = model_info['loaded_context_length']
+
+            if old_limit != self.context_limit:
+                logger.info(f"🔄 Updated context limit: {old_limit:,} → {self.context_limit:,} tokens")
+
+            return model_info
+
+        return None
 
     def _configure_logging(self):
         """Configure logging based on config settings"""
@@ -267,39 +368,115 @@ class SAMAgent:
                     config_data = json.load(f)
                     logger.info("Loaded configuration from config.json")
 
+                # Store the raw config data for provider switching
+                self.raw_config = config_data
+
                 # Create SAMConfig from loaded data
                 config = SAMConfig()
 
                 # Update config with loaded data
                 if 'lmstudio' in config_data:
                     for key, value in config_data['lmstudio'].items():
-                        setattr(config.lmstudio, key, value)
+                        if hasattr(config.lmstudio, key):
+                            setattr(config.lmstudio, key, value)
 
+                # Handle model config - your config.json uses "name" but config.py expects "model_name"
                 if 'model' in config_data:
-                    for key, value in config_data['model'].items():
-                        setattr(config.model, key, value)
+                    model_data = config_data['model']
+                    if 'name' in model_data:
+                        config.model.model_name = model_data['name']
+                    for key, value in model_data.items():
+                        if key != 'name' and hasattr(config.model, key):
+                            setattr(config.model, key, value)
 
                 if 'mcp' in config_data:
                     for key, value in config_data['mcp'].items():
-                        setattr(config.mcp, key, value)
+                        if hasattr(config.mcp, key):
+                            setattr(config.mcp, key, value)
 
-                # FIX: Add logging configuration
                 if 'logging' in config_data:
                     for key, value in config_data['logging'].items():
-                        setattr(config.logging, key, value)
+                        if hasattr(config.logging, key):
+                            setattr(config.logging, key, value)
 
                 return config
 
             except Exception as e:
                 logger.warning(f"Failed to load config.json: {e}, using defaults")
+                self.raw_config = {}
                 return SAMConfig()
         else:
             logger.info("No config.json found, using default configuration")
+            self.raw_config = {}
             return SAMConfig()
 
     # ===== LLM COMMUNICATION =====
     def generate_chat_completion(self, messages: List[Dict], **kwargs) -> str:
-        """Generate chat completion using LM Studio API"""
+        """Generate chat completion using the configured provider"""
+        provider = self.raw_config.get('provider', 'lmstudio')
+
+        if provider == 'claude':
+            return self._generate_claude_completion(messages, **kwargs)
+        else:
+            return self._generate_lmstudio_completion(messages, **kwargs)
+
+    def _generate_claude_completion(self, messages: List[Dict], **kwargs) -> str:
+        """Generate completion using Claude API"""
+        try:
+            # Import anthropic here to avoid dependency issues
+            try:
+                import anthropic
+            except ImportError:
+                return "Error: anthropic package not installed. Run: pip install anthropic"
+
+            # Get Claude config
+            claude_config = self.raw_config.get('providers', {}).get('claude', {})
+            api_key = claude_config.get('api_key')
+
+            if not api_key:
+                return "Error: Claude API key not found in config"
+
+            # Create client
+            client = anthropic.Anthropic(api_key=api_key)
+
+            # Prepare parameters
+            model = claude_config.get('model_name', 'claude-sonnet-4-20250514')
+            final_max_tokens = kwargs.get('max_tokens', 4000)
+            final_temperature = kwargs.get('temperature', 0.3)
+
+            # Convert messages to Claude format
+            claude_messages = []
+            system_content = ""
+
+            for msg in messages:
+                if msg['role'] == 'system':
+                    system_content += msg['content'] + "\n"
+                else:
+                    claude_messages.append(msg)
+
+            # Create message with system prompt
+            response = client.messages.create(
+                model=model,
+                max_tokens=final_max_tokens,
+                temperature=final_temperature,
+                system=system_content.strip() if system_content else None,
+                messages=claude_messages
+            )
+
+            # Extract text response
+            response_text = ""
+            for content_block in response.content:
+                if hasattr(content_block, 'text'):
+                    response_text += content_block.text
+
+            return response_text.strip()
+
+        except Exception as e:
+            logger.error(f"Claude API error: {e}")
+            return f"Error calling Claude API: {str(e)}"
+
+    def _generate_lmstudio_completion(self, messages: List[Dict], **kwargs) -> str:
+        """Generate completion using LMStudio API"""
         if not REQUESTS_AVAILABLE:
             return "❌ Error: requests library not available"
 
@@ -307,7 +484,7 @@ class SAMAgent:
             payload = {
                 "model": self.model_name,
                 "messages": messages,
-                "temperature": kwargs.get("temperature", 0.7),
+                "temperature": kwargs.get("temperature", 0.3),
                 "max_tokens": kwargs.get("max_tokens", 2000),
                 "stream": False
             }
@@ -1141,6 +1318,7 @@ def main():
     print(f"\n=== 🤖 SAM Agent Interactive Mode ===")
     print("Type 'exit' to quit, 'tools' to list available tools")
     print("Commands: 'debug' (toggle debug), 'reset' (clear history), 'tools' (list tools)")
+    print("Providers: 'provider claude/lmstudio', 'providers' (list available)")
     print("Safety: 'safety on/off', 'auto on/off', 'safety' (status)")
     print("MCP Commands: 'mcp servers', 'mcp connect <server>', 'mcp disconnect <server>'")
 
@@ -1160,6 +1338,16 @@ def main():
                 # Clean up MCP connections
                 asyncio.run(sam.disconnect_mcp_servers())
                 break
+
+            elif user_input.lower().startswith('provider '):
+                provider_name = user_input.split(' ', 1)[1].strip()
+                result = sam.switch_provider(provider_name)
+                print(result)
+                continue
+            elif user_input.lower() == 'providers':
+                result = sam.get_current_provider()
+                print(result)
+                continue
 
             elif user_input.lower() == 'debug':
                 debug_mode = not debug_mode
