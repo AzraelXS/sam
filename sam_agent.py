@@ -472,31 +472,45 @@ class SAMAgent:
             final_max_tokens = kwargs.get('max_tokens', 4000)
             final_temperature = kwargs.get('temperature', 0.3)
 
-            # Convert messages to Claude format
+            # Convert messages to Claude format and strip all content
             claude_messages = []
             system_content = ""
 
             for msg in messages:
                 if msg['role'] == 'system':
-                    system_content += msg['content'] + "\n"
+                    # Strip system content and ensure no trailing whitespace
+                    content = str(msg['content']).strip()
+                    if content:
+                        system_content += content + "\n"
                 else:
-                    claude_messages.append(msg)
+                    # Strip all message content to prevent trailing whitespace issues
+                    cleaned_msg = {
+                        'role': msg['role'],
+                        'content': str(msg['content']).strip()
+                    }
+                    # Only add non-empty messages
+                    if cleaned_msg['content']:
+                        claude_messages.append(cleaned_msg)
+
+            # Ensure system content is properly stripped
+            system_content = system_content.strip() if system_content else None
 
             # Create message with system prompt
             response = client.messages.create(
                 model=model,
                 max_tokens=final_max_tokens,
                 temperature=final_temperature,
-                system=system_content.strip() if system_content else None,
+                system=system_content,
                 messages=claude_messages
             )
 
-            # Extract text response
+            # Extract text response and ensure no trailing whitespace
             response_text = ""
             for content_block in response.content:
                 if hasattr(content_block, 'text'):
                     response_text += content_block.text
 
+            # Critical: Strip all whitespace from the response
             return response_text.strip()
 
         except Exception as e:
