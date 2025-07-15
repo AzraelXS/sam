@@ -887,21 +887,30 @@ class SAMAgent:
 
     def _prompt_for_approval(self, tool_name: str, args: Dict[str, Any], tool_info: ToolInfo = None) -> bool:
         """Prompt user for tool execution approval"""
-        print(f"\n🔍 TOOL APPROVAL REQUIRED")
-        print(f"Tool: {tool_name}")
+        print(f"\n" + "=" * 60)
+        print(f"🛡️  TOOL APPROVAL REQUIRED")
+        print("=" * 60)
+
+        print(f"🔧 Tool: {tool_name}")
         if tool_info:
-            print(f"Category: {tool_info.category.value}")
-            print(f"Description: {tool_info.description}")
-        print(f"Arguments: {json.dumps(args, indent=2)}")
-        print("\nOptions:")
-        print("  'y' or 'yes' - Execute this tool")
-        print("  'n' or 'no' - Skip this tool")
-        print("  'info' - Show detailed tool information")
-        print("  'stop' - Stop all tool execution for this request")
+            print(f"📂 Category: {tool_info.category.value}")
+            print(f"📄 Description: {tool_info.description}")
+
+        # Show arguments in a cleaner format
+        print(f"\n📋 Arguments:")
+        for key, value in args.items():
+            # Truncate long values for display
+            display_value = str(value)
+            if len(display_value) > 80:
+                display_value = display_value[:80] + "..."
+            print(f"   {key}: {display_value}")
+
+        print(f"\n⚡ Options: [y]es | [n]o | [i]nfo | [s]top")
+        print("=" * 60)
 
         while True:
             try:
-                response = input("🤔 Approve tool execution? (y/n/info/stop): ").strip().lower()
+                response = input("🤔 Approve? ").strip().lower()
 
                 if response in ['y', 'yes']:
                     print("✅ Tool execution approved")
@@ -909,14 +918,14 @@ class SAMAgent:
                 elif response in ['n', 'no']:
                     print("❌ Tool execution denied")
                     return False
-                elif response == 'info':
+                elif response in ['i', 'info']:
                     self._show_tool_info(tool_name, tool_info)
                     continue
-                elif response == 'stop':
+                elif response in ['s', 'stop']:
                     self.request_stop()
                     return False
                 else:
-                    print("Please enter 'y', 'n', 'info', or 'stop'")
+                    print("❌ Please enter: y, n, i, or s")
 
             except (EOFError, KeyboardInterrupt):
                 print("\n❌ Tool execution denied (interrupted)")
@@ -1028,6 +1037,12 @@ class SAMAgent:
             # Get tool info for safety checks
             tool_info = self.tool_info.get(tool_name)
 
+            # Show raw tool call details BEFORE approval/execution
+            print(f"\n🔧 RAW TOOL CALL:")
+            print(f"Tool: {tool_name}")
+            print(f"Arguments: {json.dumps(args, indent=2)}")
+            print()  # Add blank line here
+
             # Check if approval is required
             requires_approval = (
                     self.safety_mode and
@@ -1036,14 +1051,10 @@ class SAMAgent:
             )
 
             if requires_approval:
-                # Display the raw tool call first
-                print(f"\n🔧 RAW TOOL CALL:")
-                print(f"Tool: {tool_name}")
-                print(f"Arguments: {json.dumps(args, indent=2)}")
-
                 # Prompt for approval
                 if not self._prompt_for_approval(tool_name, args, tool_info):
                     return f"❌ Tool execution denied by user: {tool_name}"
+                print()  # Add blank line after approval
 
             # Update usage count
             if tool_info:
@@ -1061,6 +1072,7 @@ class SAMAgent:
                 print(f"✅ Tool completed in {execution_time:.3f}s")
 
                 # Display raw results
+                print()  # Add blank line before results
                 print(f"\n📊 RAW RESULTS:")
                 print("=" * 60)
                 print(str(result))
@@ -1178,6 +1190,7 @@ class SAMAgent:
     - Use tools whenever they would be helpful for the user's request
     - Always provide the tool call first, then explain what you're doing
     - For multiple tools, use separate JSON objects in separate code blocks
+    - When you receive tool results from the user, respond naturally about what you found
 
     {tools_context}
 
@@ -1215,7 +1228,13 @@ class SAMAgent:
                     })
                     break
 
-                # Execute tools
+                # Add the assistant's tool-calling response to history
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": response
+                })
+
+                # Execute tools and collect results
                 tool_results = []
                 for tool_call in tool_calls:
                     if self.stop_requested:
@@ -1229,7 +1248,7 @@ class SAMAgent:
 
                     try:
                         result = await self._execute_tool(tool_name, tool_args)
-                        tool_results.append(f"Tool {tool_name} result: {result}")
+                        tool_results.append(f"Tool '{tool_name}' executed successfully:\n{result}")
                         tool_call_count += 1
 
                         # Safety limit on tool calls
@@ -1238,24 +1257,24 @@ class SAMAgent:
                             break
 
                     except Exception as e:
-                        error_msg = f"Tool {tool_name} failed: {str(e)}"
+                        error_msg = f"Tool '{tool_name}' failed: {str(e)}"
                         tool_results.append(error_msg)
                         logger.error(error_msg)
 
-                # Add assistant response with tool results
-                combined_response = response
+                # Feed tool results back to LLM as a "user" message (simulating human providing results)
                 if tool_results:
-                    combined_response += "\n\nTool Results:\n" + "\n".join(tool_results)
+                    tool_results_message = "Here are the results from the tool execution:\n\n" + "\n\n".join(
+                        tool_results)
 
-                self.conversation_history.append({
-                    "role": "assistant",
-                    "content": combined_response
-                })
+                    self.conversation_history.append({
+                        "role": "user",
+                        "content": tool_results_message
+                    })
 
-                # If we executed tools, continue to next iteration for follow-up
-                if tool_results and not self.stop_requested:
+                    # Continue the loop so LLM can respond to the tool results naturally
                     continue
                 else:
+                    # No tools executed, we're done
                     break
 
             return last_response
@@ -1461,6 +1480,22 @@ def main():
                 asyncio.run(sam.disconnect_mcp_servers())
                 break
 
+            # Handle safety commands
+            elif user_input.lower().startswith('safety') or user_input.lower().startswith('auto'):
+                safety_commands = {
+                    'safety': sam.get_safety_status,
+                    'safety on': lambda: sam.set_safety_mode(True),
+                    'safety off': lambda: sam.set_safety_mode(False),
+                    'auto on': lambda: sam.set_auto_approve(True),
+                    'auto off': lambda: sam.set_auto_approve(False),
+                }
+
+                if user_input.lower() in safety_commands:
+                    result = safety_commands[user_input.lower()]()
+                    print(result)
+                    continue  # This is crucial - it prevents the "SAM is thinking" code from running
+
+
             elif user_input.lower().startswith('provider '):
                 provider_name = user_input.split(' ', 1)[1].strip()
                 result = sam.switch_provider(provider_name)
@@ -1551,21 +1586,6 @@ def main():
                         print(f"✅ Disconnected from MCP server: {server_name}")
                     else:
                         print(f"❌ Server '{server_name}' is not connected")
-                    continue
-
-            # Handle safety commands
-            elif user_input.lower().startswith('safety'):
-                safety_commands = {
-                    'safety': sam.get_safety_status,
-                    'safety on': lambda: sam.set_safety_mode(True),
-                    'safety off': lambda: sam.set_safety_mode(False),
-                    'auto on': lambda: sam.set_auto_approve(True),
-                    'auto off': lambda: sam.set_auto_approve(False),
-                }
-
-                if user_input.lower() in safety_commands:
-                    result = safety_commands[user_input.lower()]()
-                    print(result)
                     continue
 
             print("🤖 SAM is thinking...")
