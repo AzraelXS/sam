@@ -4,9 +4,6 @@ SAM Agent - Semi-Autonomous Model AI Agent
 Enhanced with full Model Context Protocol (MCP) support
 """
 
-
-
-
 import json
 import logging
 import time
@@ -888,7 +885,7 @@ class SAMAgent:
     def _prompt_for_approval(self, tool_name: str, args: Dict[str, Any], tool_info: ToolInfo = None) -> bool:
         """Prompt user for tool execution approval"""
         print(f"\n" + "=" * 60)
-        print(f"🛡️  TOOL APPROVAL REQUIRED")
+        print(f"🛡️ TOOL APPROVAL REQUIRED")
         print("=" * 60)
 
         print(f"🔧 Tool: {tool_name}")
@@ -913,7 +910,7 @@ class SAMAgent:
                 response = input("🤔 Approve? ").strip().lower()
 
                 if response in ['y', 'yes']:
-                    print("✅ Tool execution approved")
+                    print("\n✅ Tool execution approved")
                     return True
                 elif response in ['n', 'no']:
                     print("❌ Tool execution denied")
@@ -1041,7 +1038,7 @@ class SAMAgent:
             print(f"\n🔧 RAW TOOL CALL:")
             print(f"Tool: {tool_name}")
             print(f"Arguments: {json.dumps(args, indent=2)}")
-            print()  # Add blank line here
+            #print()  # Add blank line here
 
             # Check if approval is required
             requires_approval = (
