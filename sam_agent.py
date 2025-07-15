@@ -856,7 +856,7 @@ class SAMAgent:
     def get_safety_status(self) -> str:
         """Get current safety configuration status"""
         return (f"🛡️ Safety Mode: {'ON' if self.safety_mode else 'OFF'} | "
-                f"🤖 Auto-approve: {'ON' if self.auto_approve else 'OFF'}")
+                f"⚠️ Auto-approve: {'ON' if self.auto_approve else 'OFF'}")
 
     def get_detailed_safety_status(self) -> Dict[str, Any]:
         """Get detailed safety status for API responses"""
@@ -881,7 +881,7 @@ class SAMAgent:
         """Enable or disable auto-approve mode"""
         self.auto_approve = enabled
         status = "ON" if enabled else "OFF"
-        result = f"🤖 Auto-approve {status}"
+        result = f"⚠️ Auto-approve {status}"
         logger.info(result)
         return result
 
@@ -1445,7 +1445,7 @@ def main():
 
     # Display capabilities
     tools_info = sam.list_tools()
-    print(f"\n=== 🤖 SAM CAPABILITIES ===")
+    print(f"\n=== 🕵️ SAM CAPABILITIES ===")
     print(f"🤖 Model: {sam.model_name}")
     print(f"🧠 Context: {sam.context_limit:,} tokens")
     print(f"🔧 Local tools: {len(sam.local_tools)}")
@@ -1453,10 +1453,10 @@ def main():
     print(f"📡 MCP servers: {len(sam.mcp_sessions)}")
     print(f"🔌 Plugins: {len(sam.plugin_manager.plugins)}")
     print(f"🛡️ Safety mode: {'ON' if sam.safety_mode else 'OFF'}")
-    print(f"🤖 Auto-approve: {'ON' if sam.auto_approve else 'OFF'}")
+    print(f"⚠️ Auto-approve: {'ON' if sam.auto_approve else 'OFF'}")
 
     # Interactive loop
-    print(f"\n=== 🤖 SAM Agent Interactive Mode ===")
+    print(f"\n=== 🖥️ SAM Agent Interactive Mode ===")
     print("Type 'exit' to quit, 'tools' to list available tools")
     print("Commands: 'debug' (toggle debug), 'reset' (clear history), 'tools' (list tools)")
     print("Providers: 'provider claude/lmstudio', 'providers' (list available)")
