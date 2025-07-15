@@ -1442,8 +1442,8 @@ def main():
         ])
         if "error" not in test_response.lower():
             print("✅ API connection test successful!")
-            print(f"📊 Using model: {sam.model_name}")
-            print(f"📊 Context limit: {sam.context_limit:,} tokens")
+            print(f"🤖 Using model: {sam.model_name}")
+            print(f"🧠 Context limit: {sam.context_limit:,} tokens")
         else:
             print(f"❌ API test failed: {test_response}")
     except Exception as e:
