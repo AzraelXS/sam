@@ -1427,7 +1427,7 @@ def main():
             return
 
     # If no --api flag, continue with original interactive mode
-    print("🤖 Starting SAM initialization...")
+    print("🕵️ Starting SAM initialization...")
 
     # Initialize SAM - will auto-load config.json
     sam = SAMAgent()
