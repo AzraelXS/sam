@@ -1594,7 +1594,7 @@ def main():
                         print(f"❌ Server '{server_name}' is not connected")
                     continue
 
-            print("🤖 SAM is thinking...")
+            print("\n🤖 SAM is thinking...")
 
             # Run SAM with the user input (async)
             response = asyncio.run(sam.run(user_input, verbose=debug_mode))
