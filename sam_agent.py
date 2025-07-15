@@ -1096,9 +1096,8 @@ class SAMAgent:
             return error_msg
 
     def _extract_tool_calls(self, text: str) -> List[Dict[str, Any]]:
-        """Extract tool calls from LLM response"""
+        """Extract tool calls from LLM response - FIXED to allow legitimate duplicates"""
         tool_calls = []
-        seen_calls = set()
 
         # Multiple patterns to catch different JSON formatting
         patterns = [
@@ -1109,12 +1108,23 @@ class SAMAgent:
             r'```(?:json)?\s*(.*?)```',  # Code blocks without explicit json
         ]
 
+        # Track positions to avoid extracting the same JSON from overlapping patterns
+        extracted_positions = set()
+
         for pattern in patterns:
-            matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
-            for match in matches:
+            for match in re.finditer(pattern, text, re.DOTALL | re.IGNORECASE):
+                # Check if we've already extracted this position
+                match_start = match.start()
+                match_end = match.end()
+
+                # Skip if this overlaps with already extracted content
+                if any(start <= match_start < end or start < match_end <= end
+                       for start, end in extracted_positions):
+                    continue
+
                 try:
                     # Clean the match
-                    cleaned = match.strip()
+                    cleaned = match.group(1).strip()
 
                     # Parse JSON
                     tool_call = json.loads(cleaned)
@@ -1124,13 +1134,9 @@ class SAMAgent:
                         if 'arguments' not in tool_call:
                             tool_call['arguments'] = {}
 
-                        # Create a unique identifier for this tool call
-                        call_signature = json.dumps(tool_call, sort_keys=True)
-
-                        # Only add if we haven't seen this exact call before
-                        if call_signature not in seen_calls:
-                            tool_calls.append(tool_call)
-                            seen_calls.add(call_signature)
+                        # Add the tool call (allowing duplicates)
+                        tool_calls.append(tool_call)
+                        extracted_positions.add((match_start, match_end))
 
                 except json.JSONDecodeError:
                     continue
