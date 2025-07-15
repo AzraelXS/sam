@@ -1,6 +1,6 @@
 # !/usr/bin/env python3
 """
-SAM Agent - Semi-Autonomous Model AI Agent
+SAM - Secret Agent Man - AI agent
 Enhanced with full Model Context Protocol (MCP) support
 """
 
