@@ -792,199 +792,193 @@ class SAMAgent:
             return False
 
     async def _connect_stdio_mcp(self, server_name: str, server_path: str) -> bool:
-        """Connect to a stdio MCP server"""
-        logger.info(f"Connecting to MCP server: {server_name}")
+        """Connect to a stdio MCP server - just test the connection and register tools"""
+        print(f"🔍 DEBUG: Testing connection to {server_name} at {server_path}")
 
         if not os.path.exists(server_path):
-            logger.error(f"MCP server script not found at {server_path}")
+            print(f"❌ DEBUG: File does not exist: {server_path}")
             return False
 
         try:
-            import asyncio
-            import json
+            # Import the REAL MCP client libraries
+            from mcp import ClientSession, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+
+            # Get server config for additional args
+            server_config = self.config.mcp.servers.get(server_name, {})
+            args = server_config.get('args', [])
 
             # Determine command
-            if server_path.endswith('.js'):
-                command = ["node", server_path]
-            elif server_path.endswith('.py'):
+            if server_path.endswith('.py'):
                 python_cmd = "python" if sys.platform == "win32" else "python3"
-                command = [python_cmd, server_path]
-            elif server_path.endswith('.bat') or server_path.endswith('.cmd'):
-                command = [server_path]
+                command = [python_cmd, server_path] + args
+            elif server_path.endswith('.js'):
+                command = ["node", server_path] + args
+            elif server_path.endswith('.exe'):
+                command = [server_path] + args
             else:
-                logger.error(f"Unsupported server script type: {server_path}")
+                print(f"❌ DEBUG: Unsupported file type: {server_path}")
                 return False
 
-            logger.debug(f"Starting MCP server with command: {command}")
+            print(f"🔍 DEBUG: Testing command: {command}")
 
-            # Start the subprocess
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=os.path.dirname(server_path) if os.path.dirname(server_path) else None
+            # Create server parameters
+            server_params = StdioServerParameters(
+                command=command[0],
+                args=command[1:] if len(command) > 1 else [],
+                env=None
             )
 
-            logger.debug(f"MCP server process started with PID: {process.pid}")
+            # Test connection and get tools
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    # Initialize the session
+                    await session.initialize()
 
-            # Create session wrapper
-            class MCPSession:
-                def __init__(self, process):
-                    self.process = process
-                    self._next_id = 1
+                    print(f"✅ DEBUG: Test connection successful!")
 
-                def _get_next_id(self):
-                    self._next_id += 1
-                    return self._next_id
+                    # Get tools for registration
+                    result = await session.list_tools()
 
-                async def send_message(self, method, params=None):
-                    """Send a JSON-RPC message"""
-                    message = {
-                        "jsonrpc": "2.0",
-                        "id": self._get_next_id(),
-                        "method": method,
-                        "params": params or {}
-                    }
+                    if result.tools:
+                        for tool in result.tools:
+                            tool_info = {
+                                "name": tool.name,
+                                "description": tool.description or "",
+                                "input_schema": tool.inputSchema or {},
+                                "server": server_name
+                            }
 
-                    message_str = json.dumps(message) + "\n"
-                    logger.debug(f"Sending MCP message: {method}")
+                            self.mcp_tools[tool.name] = (server_name, tool_info)
+                            print(f"✅ DEBUG: Registered MCP tool: {tool.name}")
 
-                    self.process.stdin.write(message_str.encode())
-                    await self.process.stdin.drain()
+                        print(f"✅ DEBUG: Registered {len(result.tools)} tools")
 
-                    try:
-                        response_data = await asyncio.wait_for(
-                            self.process.stdout.readline(),
-                            timeout=5.0
-                        )
+                        # Don't store the session - we'll reconnect for each tool call
+                        self.mcp_sessions[server_name] = "connection_tested"  # Just a marker
 
-                        if response_data:
-                            response = json.loads(response_data.decode().strip())
-                            return response
-                        return None
-
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Timeout waiting for MCP response to {method}")
-                        return None
-                    except json.JSONDecodeError as e:
-                        logger.error(f"JSON decode error in MCP response: {e}")
-                        return None
-
-                async def initialize(self):
-                    """Initialize MCP session with proper handshake"""
-                    logger.debug("Initializing MCP session")
-
-                    # Step 1: Initialize
-                    response = await self.send_message("initialize", {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {"tools": {}},
-                        "clientInfo": {"name": "SAM", "version": "1.0.0"}
-                    })
-
-                    if not response or 'error' in response:
-                        logger.error(f"MCP initialization failed: {response}")
-                        return response
-
-                    # Step 2: Send initialized notification
-                    initialized_msg = {
-                        "jsonrpc": "2.0",
-                        "method": "notifications/initialized"
-                    }
-
-                    message_str = json.dumps(initialized_msg) + "\n"
-                    self.process.stdin.write(message_str.encode())
-                    await self.process.stdin.drain()
-
-                    await asyncio.sleep(0.1)  # Brief pause
-
-                    logger.debug("MCP initialization complete")
-                    return response
-
-                async def list_tools(self):
-                    """List available tools"""
-                    logger.debug("Requesting MCP tools list")
-
-                    # Define MockResult class first
-                    class MockResult:
-                        def __init__(self, response):
-                            self.tools = []
-                            if response and 'result' in response and 'tools' in response['result']:
-                                for tool_data in response['result']['tools']:
-                                    mock_tool = type('MockTool', (), {})()
-                                    mock_tool.name = tool_data.get('name', 'unknown')
-                                    mock_tool.description = tool_data.get('description', '')
-                                    mock_tool.input_schema = tool_data.get('inputSchema', {})
-                                    self.tools.append(mock_tool)
-
-                    message = {
-                        "jsonrpc": "2.0",
-                        "id": self._get_next_id(),
-                        "method": "tools/list"
-                    }
-
-                    message_str = json.dumps(message) + "\n"
-                    self.process.stdin.write(message_str.encode())
-                    await self.process.stdin.drain()
-
-                    try:
-                        response_data = await asyncio.wait_for(
-                            self.process.stdout.readline(),
-                            timeout=10.0
-                        )
-
-                        if response_data:
-                            response = json.loads(response_data.decode().strip())
-                        else:
-                            return MockResult(None)
-
-                    except Exception as e:
-                        logger.error(f"Error getting MCP tools list: {e}")
-                        return MockResult(None)  # ✅ Now MockResult is defined!
-
-                    return MockResult(response)
-
-                async def call_tool(self, name, arguments):
-                    """Call an MCP tool"""
-                    logger.debug(f"Calling MCP tool: {name}")
-
-                    response = await self.send_message("tools/call", {
-                        "name": name,
-                        "arguments": arguments
-                    })
-
-                    class MockResult:
-                        def __init__(self, response):
-                            if response and 'result' in response:
-                                self.content = response['result']
-                            else:
-                                self.content = f"No result from tool {name}"
-
-                    return MockResult(response)
-
-            # Create and initialize session
-            session = MCPSession(process)
-
-            init_response = await session.initialize()
-            if not init_response or 'error' in init_response:
-                process.terminate()
-                return False
-
-            # Store session
-            self.mcp_sessions[server_name] = {
-                'session': session,
-                'process': process
-            }
-
-            # Register tools
-            await self._register_mcp_tools(server_name, session)
-
-            logger.info(f"Successfully connected to MCP server: {server_name}")
-            return True
+                        return True
+                    else:
+                        print(f"⚠️ DEBUG: No tools found")
+                        return False
 
         except Exception as e:
-            logger.error(f"Failed to connect to MCP server {server_name}: {str(e)}")
+            print(f"❌ DEBUG: Connection test failed: {e}")
+            import traceback
+            traceback.print_exc()
             return False
+
+    async def _register_mcp_tools_real(self, server_name: str, session):
+        """Register tools using the REAL MCP client"""
+        try:
+            print(f"🔍 DEBUG: Registering tools with REAL MCP client")
+
+            # List tools using the real client
+            result = await session.list_tools()
+
+            print(f"🔍 DEBUG: Got tools result: {result}")
+
+            if result.tools:
+                for tool in result.tools:
+                    tool_info = {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "input_schema": tool.inputSchema or {},
+                        "server": server_name
+                    }
+
+                    self.mcp_tools[tool.name] = (server_name, tool_info)
+                    print(f"✅ DEBUG: Registered real MCP tool: {tool.name}")
+
+                print(f"✅ DEBUG: Registered {len(result.tools)} tools from real MCP client")
+            else:
+                print(f"⚠️ DEBUG: No tools found from real MCP client")
+
+        except Exception as e:
+            print(f"❌ DEBUG: Error registering real MCP tools: {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def _execute_mcp_tool_real(self, tool_name: str, args: Dict[str, Any]) -> str:
+        """Execute MCP tool using the REAL MCP client - fresh connection each time"""
+        if tool_name not in self.mcp_tools:
+            return f"❌ MCP tool not found: {tool_name}"
+
+        server_name, tool_info = self.mcp_tools[tool_name]
+
+        # Get the server config to reconnect
+        server_config = self.config.mcp.servers.get(server_name, {})
+        server_path = server_config.get('path', '')
+        args_list = server_config.get('args', [])
+
+        if not os.path.exists(server_path):
+            return f"❌ MCP server path not found: {server_path}"
+
+        try:
+            # Import the REAL MCP client libraries
+            from mcp import ClientSession, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+
+            # Determine command
+            if server_path.endswith('.py'):
+                python_cmd = "python" if sys.platform == "win32" else "python3"
+                command = [python_cmd, server_path] + args_list
+            elif server_path.endswith('.js'):
+                command = ["node", server_path] + args_list
+            elif server_path.endswith('.exe'):
+                command = [server_path] + args_list
+            else:
+                return f"❌ Unsupported server file type: {server_path}"
+
+            print(f"🌐 Executing MCP tool with FRESH connection: {tool_name}")
+            print(f"🔍 DEBUG: Command: {command}")
+            print(f"🔍 DEBUG: Args: {args}")
+
+            # Create server parameters
+            server_params = StdioServerParameters(
+                command=command[0],
+                args=command[1:] if len(command) > 1 else [],
+                env=None
+            )
+
+            # Connect using the REAL MCP client with proper context management
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    # Initialize the session
+                    await session.initialize()
+
+                    print(f"🔍 DEBUG: Fresh session initialized")
+
+                    # Call the tool immediately
+                    result = await session.call_tool(tool_name, args)
+
+                    print(f"🔍 DEBUG: Raw result type: {type(result)}")
+                    print(f"🔍 DEBUG: Raw result: {result}")
+
+                    # Extract the result content properly
+                    if hasattr(result, 'content') and result.content:
+                        if isinstance(result.content, list):
+                            content_parts = []
+                            for item in result.content:
+                                if hasattr(item, 'text'):
+                                    content_parts.append(item.text)
+                                else:
+                                    content_parts.append(str(item))
+                            final_result = "\n".join(content_parts)
+                        else:
+                            final_result = str(result.content)
+                    else:
+                        final_result = str(result)
+
+                    print(f"✅ DEBUG: Tool executed successfully, result length: {len(final_result)}")
+                    return final_result
+
+        except Exception as e:
+            error_msg = f"Error executing MCP tool {tool_name}: {str(e)}"
+            print(f"❌ MCP tool error: {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return error_msg
 
     async def _connect_websocket_mcp(self, server_name: str, ws_url: str, headers: Dict[str, str] = None) -> bool:
         """Connect to a WebSocket MCP server"""
@@ -1039,15 +1033,14 @@ class SAMAgent:
             return False
 
     async def _register_mcp_tools(self, server_name: str, session):
-        """Register tools from an MCP server"""
+        """Register tools from an MCP server using official client"""
         try:
-            # If session is wrapped in dict, extract it
-            if isinstance(session, dict):
-                actual_session = session['session']
-            else:
-                actual_session = session
+            print(f"🔍 DEBUG: _register_mcp_tools called with:")
+            print(f"  server_name: {server_name} (type: {type(server_name)})")
+            print(f"  session: {session} (type: {type(session)})")
 
-            tools_result = await actual_session.list_tools()
+            # session should be the actual session object
+            tools_result = await session.list_tools()
 
             if not tools_result or not tools_result.tools:
                 logger.warning(f"No tools found in server: {server_name}")
@@ -1070,49 +1063,8 @@ class SAMAgent:
             logger.error(f"Error registering tools from server {server_name}: {str(e)}")
 
     async def _execute_mcp_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
-        """Execute an MCP tool"""
-        if tool_name not in self.mcp_tools:
-            return f"❌ MCP tool not found: {tool_name}"
-
-        server_name, tool_info = self.mcp_tools[tool_name]
-        session_data = self.mcp_sessions.get(server_name)
-
-        if not session_data:
-            return f"❌ MCP server {server_name} is not connected"
-
-        try:
-            print(f"\n🌐 Executing MCP tool: {tool_name} on server: {server_name}")
-            start_time = time.time()
-
-            # Extract the actual session
-            if isinstance(session_data, dict):
-                session = session_data['session']
-            else:
-                session = session_data
-
-            # Execute the tool via MCP
-            tool_result = await session.call_tool(tool_name, args)
-            result = tool_result.content
-
-            execution_time = time.time() - start_time
-            print(f"✅ MCP tool completed in {execution_time:.3f}s")
-
-            # Display raw results
-            print(f"\n📊 MCP TOOL RESULTS:")
-            print("=" * 60)
-            print(str(result))
-            print("=" * 60)
-
-            return str(result)
-
-        except Exception as e:
-            error_msg = f"Error executing MCP tool {tool_name}: {str(e)}"
-            logger.error(error_msg)
-            print(f"\n❌ MCP TOOL ERROR:")
-            print("=" * 60)
-            print(error_msg)
-            print("=" * 60)
-            return error_msg
+        """Execute an MCP tool using the REAL MCP client"""
+        return await self._execute_mcp_tool_real(tool_name, args)
 
     async def disconnect_mcp_servers(self):
         """Disconnect from all MCP servers"""
@@ -1872,17 +1824,47 @@ def main():
 
                 elif mcp_command.startswith('disconnect '):
                     server_name = mcp_command[11:].strip()
+
                     if server_name in sam.mcp_sessions:
-                        session = sam.mcp_sessions[server_name]
-                        asyncio.run(session.close())
+                        session_data = sam.mcp_sessions[server_name]
+
+                        # Handle the dictionary format properly
+                        if isinstance(session_data, dict):
+
+                            # Terminate the process if it exists
+                            if 'process' in session_data:
+                                process = session_data['process']
+
+                                if process and process.returncode is None:
+                                    process.terminate()
+
+                                    try:
+                                        process.wait(timeout=2)  # Wait up to 2 seconds for clean shutdown
+                                    except:
+                                        process.kill()  # Force kill if it doesn't terminate
+
+                        elif hasattr(session_data, 'process'):
+                            # Handle direct session objects
+                            if session_data.process and session_data.process.returncode is None:
+                                session_data.process.terminate()
+
+                                try:
+                                    session_data.process.wait(timeout=2)
+                                except:
+                                    session_data.process.kill()
+
+                        # Remove from sessions and tools
                         del sam.mcp_sessions[server_name]
-                        # Remove tools from this server
+
                         tools_to_remove = [tool for tool, (srv, _) in sam.mcp_tools.items() if srv == server_name]
+
                         for tool in tools_to_remove:
                             del sam.mcp_tools[tool]
+
                         print(f"✅ Disconnected from MCP server: {server_name}")
                     else:
                         print(f"❌ Server '{server_name}' is not connected")
+
                     continue
 
             print("\n🤖 SAM is thinking...")
