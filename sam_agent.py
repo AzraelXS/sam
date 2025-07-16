@@ -232,11 +232,16 @@ class SAMAgent:
     """Semi-Autonomous Model AI Agent with MCP support"""
 
     def __init__(self, model_name: str = None, context_limit: int = None, safety_mode: bool = True,
-                 auto_approve: bool = False):
+                 auto_approve: bool = False, connect_mcp_on_startup: bool = True):
         """Initialize SAM Agent"""
 
         # Load configuration
         self.config = self._load_config()
+
+        # MCP auto-connection flag - will trigger on first run() call OR during startup if enabled
+        self._mcp_auto_connect_pending = True
+
+        logger.info(f"SAM Agent initialized - MCP auto-connect: {self.config.mcp.enabled}")
 
         # Store raw config for provider operations
         if not hasattr(self, 'raw_config'):
@@ -246,12 +251,11 @@ class SAMAgent:
         self._configure_logging()
 
         # Model configuration - use provider-aware logic
-        # Model configuration - use provider-aware logic
         provider = self.raw_config.get('provider', 'lmstudio')
         if provider == 'claude':
             provider_config = self.raw_config.get('providers', {}).get('claude', {})
             self.base_url = "https://api.anthropic.com/v1"
-            self.api_key = provider_config.get('api_key', '')  # ADD THIS LINE
+            self.api_key = provider_config.get('api_key', '')
             self.model_name = model_name or provider_config.get('model_name', 'claude-sonnet-4-20250514')
             self.context_limit = context_limit or provider_config.get('context_limit', 200000)
         else:
@@ -260,7 +264,7 @@ class SAMAgent:
             model_config = self.raw_config.get('model', {})
 
             self.base_url = self.config.lmstudio.base_url
-            self.api_key = lmstudio_config.get('api_key', self.config.lmstudio.api_key)  # ADD THIS LINE
+            self.api_key = lmstudio_config.get('api_key', self.config.lmstudio.api_key)
             # Try multiple possible locations for model name
             self.model_name = (model_name or
                                lmstudio_config.get('model_name') or
@@ -283,7 +287,6 @@ class SAMAgent:
         # MCP (Model Context Protocol) support
         self.mcp_sessions = {}
         self.mcp_tools = {}
-        self._mcp_auto_connect_pending = True
 
         # Plugin system
         self.plugin_manager = PluginManager()
@@ -292,7 +295,121 @@ class SAMAgent:
         logger.info(f"Context limit: {self.context_limit:,} tokens")
         logger.info(f"Safety mode: {'ON' if self.safety_mode else 'OFF'}")
 
-        # Note: MCP auto-connection will happen when run() is first called
+        # Connect to MCP servers during startup if enabled
+        if connect_mcp_on_startup:
+            self._connect_mcp_on_startup()
+
+    def _connect_mcp_on_startup(self):
+        """Connect to MCP servers during startup with timeout and graceful failure"""
+        if not (hasattr(self.config, 'mcp') and self.config.mcp.enabled and
+                getattr(self.config.mcp, 'servers', None)):
+            logger.info("MCP startup connection skipped (disabled or no servers)")
+            return
+
+        logger.info("🌐 Attempting MCP startup connections...")
+
+        try:
+            # Check if there's already a running event loop
+            try:
+                # Try to get the current event loop
+                loop = asyncio.get_running_loop()
+                # If we get here, we're already in an async context
+                logger.warning("Already in async context - skipping startup MCP connections")
+                return
+            except RuntimeError:
+                # No running loop, which is expected during startup
+                pass
+
+            # Create a new event loop for this synchronous startup context
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            try:
+                # Run the connection with timeout
+                startup_task = self._startup_mcp_auto_connect()
+
+                # Run the coroutine with timeout
+                loop.run_until_complete(asyncio.wait_for(startup_task, timeout=5.0))
+                self._mcp_auto_connect_pending = False  # Mark as completed
+                logger.info("✅ MCP startup connections completed")
+
+            except asyncio.TimeoutError:
+                logger.warning("⏱️ MCP startup connections timed out after 5 seconds - continuing without MCP")
+            except Exception as e:
+                logger.error(f"❌ MCP startup connections failed: {str(e)}")
+            finally:
+                # Clean up the event loop
+                loop.close()
+
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize MCP startup connections: {str(e)}")
+
+    async def _startup_mcp_auto_connect(self):
+        """Auto-connect to MCP servers during startup (async version)"""
+        if not (hasattr(self.config, 'mcp') and self.config.mcp.enabled and
+                getattr(self.config.mcp, 'servers', None)):
+            logger.debug("No MCP servers configured for startup")
+            return
+
+        # Filter for enabled servers only
+        enabled_servers = {
+            name: config for name, config in self.config.mcp.servers.items()
+            if config.get('enabled', True)
+        }
+
+        if not enabled_servers:
+            logger.info("No enabled MCP servers found for startup")
+            return
+
+        logger.info(f"Startup: connecting to {len(enabled_servers)} MCP servers...")
+
+        # Connect to servers concurrently with individual timeouts
+        connection_tasks = []
+        for server_name, server_config in enabled_servers.items():
+            task = asyncio.create_task(
+                self._connect_single_mcp_server_startup(server_name, server_config)
+            )
+            connection_tasks.append(task)
+
+        # Wait for all connections to complete or timeout
+        if connection_tasks:
+            results = await asyncio.gather(*connection_tasks, return_exceptions=True)
+
+            successful_connections = sum(1 for result in results if result is True)
+            logger.info(f"Startup MCP connections: {successful_connections}/{len(connection_tasks)} successful")
+
+    async def _connect_single_mcp_server_startup(self, server_name: str, server_config: dict) -> bool:
+        """Connect to a single MCP server during startup with individual timeout"""
+        try:
+            server_type = server_config.get('type', 'stdio')
+            server_path = server_config.get('path', '')
+
+            logger.debug(f"Startup: connecting to {server_name} ({server_type})")
+
+            if server_type == 'stdio':
+                # Use asyncio.wait_for for individual server timeout (2 seconds per server)
+                success = await asyncio.wait_for(
+                    self._connect_stdio_mcp(server_name, server_path),
+                    timeout=2.0
+                )
+
+                if success:
+                    logger.info(f"✅ Startup connected to MCP server: {server_name}")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Startup failed to connect to MCP server: {server_name}")
+                    return False
+            else:
+                logger.warning(f"⚠️ Unsupported MCP server type during startup: {server_type} for {server_name}")
+                return False
+
+        except asyncio.TimeoutError:
+            logger.warning(f"⏱️ Startup connection to {server_name} timed out")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Startup error connecting to MCP server {server_name}: {str(e)}")
+            return False
+
 
     def switch_provider(self, provider_name: str) -> str:
         """Switch between providers"""
@@ -431,17 +548,17 @@ class SAMAgent:
             logger.warning(f"Failed to configure logging from config: {e}")
 
     async def _ensure_mcp_auto_connect(self):
-        """Ensure MCP auto-connection happens once when needed"""
-        if (self._mcp_auto_connect_pending and
-                hasattr(self.config, 'mcp') and
-                self.config.mcp.enabled and
-                getattr(self.config.mcp, 'servers', None)):
-            self._mcp_auto_connect_pending = False
-            logger.info("Performing delayed MCP auto-connection...")
-            await self._auto_connect_mcp_servers()
-        elif self._mcp_auto_connect_pending:
-            self._mcp_auto_connect_pending = False
-            logger.info("MCP auto-connection skipped (disabled or no servers)")
+        """Ensure MCP auto-connection happens once when needed (updated for startup connection)"""
+        if self._mcp_auto_connect_pending:
+            if (hasattr(self.config, 'mcp') and
+                    self.config.mcp.enabled and
+                    getattr(self.config.mcp, 'servers', None)):
+                self._mcp_auto_connect_pending = False
+                logger.info("Performing delayed MCP auto-connection...")
+                await self._auto_connect_mcp_servers()
+            else:
+                self._mcp_auto_connect_pending = False
+                logger.info("MCP auto-connection skipped (disabled or no servers)")
 
     def _load_config(self) -> SAMConfig:
         """Load configuration from config.json or create default"""
@@ -615,42 +732,42 @@ class SAMAgent:
     # ===== MCP (MODEL CONTEXT PROTOCOL) SUPPORT =====
     async def _auto_connect_mcp_servers(self):
         """Automatically connect to configured MCP servers"""
-        if not hasattr(self.config, 'mcp') or not self.config.mcp.servers:
-            logger.info("No MCP servers configured for auto-connection")
+        if not hasattr(self.config, 'mcp') or not self.config.mcp.enabled:
+            logger.debug("MCP disabled in configuration")
+            return
+
+        if not self.config.mcp.servers:
+            logger.debug("No MCP servers configured")
             return
 
         # Filter for enabled servers only
         enabled_servers = {
             name: config for name, config in self.config.mcp.servers.items()
-            if config.get('enabled', True)  # Default to True if not specified
+            if config.get('enabled', True)
         }
 
         if not enabled_servers:
-            logger.info("No enabled MCP servers found for auto-connection")
+            logger.info("No enabled MCP servers found")
             return
 
-        logger.info(f"Auto-connecting to {len(enabled_servers)} enabled MCP servers...")
+        logger.info(f"Auto-connecting to {len(enabled_servers)} MCP servers...")
 
         for server_name, server_config in enabled_servers.items():
             try:
                 server_type = server_config.get('type', 'stdio')
                 server_path = server_config.get('path', '')
-                headers = server_config.get('headers', {})
 
-                success = await self.connect_to_mcp_server(
-                    server_name=server_name,
-                    server_type=server_type,
-                    server_path_or_url=server_path,
-                    headers=headers
-                )
-
-                if success:
-                    logger.info(f"✅ Connected to MCP server: {server_name}")
+                if server_type == 'stdio':
+                    success = await self._connect_stdio_mcp(server_name, server_path)
+                    if success:
+                        logger.info(f"Connected to MCP server: {server_name}")
+                    else:
+                        logger.warning(f"Failed to connect to MCP server: {server_name}")
                 else:
-                    logger.warning(f"❌ Failed to connect to MCP server: {server_name}")
+                    logger.warning(f"Unsupported MCP server type: {server_type} for {server_name}")
 
             except Exception as e:
-                logger.error(f"❌ Error connecting to MCP server {server_name}: {str(e)}")
+                logger.error(f"Error connecting to MCP server {server_name}: {str(e)}")
 
     async def connect_to_mcp_server(self, server_name: str, server_type: str,
                                     server_path_or_url: str, headers: Dict[str, str] = None) -> bool:
@@ -676,38 +793,197 @@ class SAMAgent:
 
     async def _connect_stdio_mcp(self, server_name: str, server_path: str) -> bool:
         """Connect to a stdio MCP server"""
-        try:
-            from mcp import stdio_client
-            from mcp.client.stdio import StdioServerParameters
-        except ImportError:
-            logger.error("MCP client not available. Install with: pip install mcp")
-            return False
+        logger.info(f"Connecting to MCP server: {server_name}")
 
         if not os.path.exists(server_path):
             logger.error(f"MCP server script not found at {server_path}")
             return False
 
         try:
-            # Determine command based on script extension
+            import asyncio
+            import json
+
+            # Determine command
             if server_path.endswith('.js'):
-                command = "node"
+                command = ["node", server_path]
             elif server_path.endswith('.py'):
-                command = "python" if sys.platform == "win32" else "python3"
+                python_cmd = "python" if sys.platform == "win32" else "python3"
+                command = [python_cmd, server_path]
+            elif server_path.endswith('.bat') or server_path.endswith('.cmd'):
+                command = [server_path]
             else:
                 logger.error(f"Unsupported server script type: {server_path}")
                 return False
 
-            server_params = StdioServerParameters(command=command, args=[server_path])
-            session = await stdio_client(server_params)
+            logger.debug(f"Starting MCP server with command: {command}")
 
-            self.mcp_sessions[server_name] = session
+            # Start the subprocess
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=os.path.dirname(server_path) if os.path.dirname(server_path) else None
+            )
+
+            logger.debug(f"MCP server process started with PID: {process.pid}")
+
+            # Create session wrapper
+            class MCPSession:
+                def __init__(self, process):
+                    self.process = process
+                    self._next_id = 1
+
+                def _get_next_id(self):
+                    self._next_id += 1
+                    return self._next_id
+
+                async def send_message(self, method, params=None):
+                    """Send a JSON-RPC message"""
+                    message = {
+                        "jsonrpc": "2.0",
+                        "id": self._get_next_id(),
+                        "method": method,
+                        "params": params or {}
+                    }
+
+                    message_str = json.dumps(message) + "\n"
+                    logger.debug(f"Sending MCP message: {method}")
+
+                    self.process.stdin.write(message_str.encode())
+                    await self.process.stdin.drain()
+
+                    try:
+                        response_data = await asyncio.wait_for(
+                            self.process.stdout.readline(),
+                            timeout=5.0
+                        )
+
+                        if response_data:
+                            response = json.loads(response_data.decode().strip())
+                            return response
+                        return None
+
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timeout waiting for MCP response to {method}")
+                        return None
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON decode error in MCP response: {e}")
+                        return None
+
+                async def initialize(self):
+                    """Initialize MCP session with proper handshake"""
+                    logger.debug("Initializing MCP session")
+
+                    # Step 1: Initialize
+                    response = await self.send_message("initialize", {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}},
+                        "clientInfo": {"name": "SAM", "version": "1.0.0"}
+                    })
+
+                    if not response or 'error' in response:
+                        logger.error(f"MCP initialization failed: {response}")
+                        return response
+
+                    # Step 2: Send initialized notification
+                    initialized_msg = {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/initialized"
+                    }
+
+                    message_str = json.dumps(initialized_msg) + "\n"
+                    self.process.stdin.write(message_str.encode())
+                    await self.process.stdin.drain()
+
+                    await asyncio.sleep(0.1)  # Brief pause
+
+                    logger.debug("MCP initialization complete")
+                    return response
+
+                async def list_tools(self):
+                    """List available tools"""
+                    logger.debug("Requesting MCP tools list")
+
+                    # Define MockResult class first
+                    class MockResult:
+                        def __init__(self, response):
+                            self.tools = []
+                            if response and 'result' in response and 'tools' in response['result']:
+                                for tool_data in response['result']['tools']:
+                                    mock_tool = type('MockTool', (), {})()
+                                    mock_tool.name = tool_data.get('name', 'unknown')
+                                    mock_tool.description = tool_data.get('description', '')
+                                    mock_tool.input_schema = tool_data.get('inputSchema', {})
+                                    self.tools.append(mock_tool)
+
+                    message = {
+                        "jsonrpc": "2.0",
+                        "id": self._get_next_id(),
+                        "method": "tools/list"
+                    }
+
+                    message_str = json.dumps(message) + "\n"
+                    self.process.stdin.write(message_str.encode())
+                    await self.process.stdin.drain()
+
+                    try:
+                        response_data = await asyncio.wait_for(
+                            self.process.stdout.readline(),
+                            timeout=10.0
+                        )
+
+                        if response_data:
+                            response = json.loads(response_data.decode().strip())
+                        else:
+                            return MockResult(None)
+
+                    except Exception as e:
+                        logger.error(f"Error getting MCP tools list: {e}")
+                        return MockResult(None)  # ✅ Now MockResult is defined!
+
+                    return MockResult(response)
+
+                async def call_tool(self, name, arguments):
+                    """Call an MCP tool"""
+                    logger.debug(f"Calling MCP tool: {name}")
+
+                    response = await self.send_message("tools/call", {
+                        "name": name,
+                        "arguments": arguments
+                    })
+
+                    class MockResult:
+                        def __init__(self, response):
+                            if response and 'result' in response:
+                                self.content = response['result']
+                            else:
+                                self.content = f"No result from tool {name}"
+
+                    return MockResult(response)
+
+            # Create and initialize session
+            session = MCPSession(process)
+
+            init_response = await session.initialize()
+            if not init_response or 'error' in init_response:
+                process.terminate()
+                return False
+
+            # Store session
+            self.mcp_sessions[server_name] = {
+                'session': session,
+                'process': process
+            }
+
+            # Register tools
             await self._register_mcp_tools(server_name, session)
 
-            logger.info(f"Successfully connected to stdio MCP server: {server_name}")
+            logger.info(f"Successfully connected to MCP server: {server_name}")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to connect to stdio MCP server {server_name}: {str(e)}")
+            logger.error(f"Failed to connect to MCP server {server_name}: {str(e)}")
             return False
 
     async def _connect_websocket_mcp(self, server_name: str, ws_url: str, headers: Dict[str, str] = None) -> bool:
@@ -765,7 +1041,14 @@ class SAMAgent:
     async def _register_mcp_tools(self, server_name: str, session):
         """Register tools from an MCP server"""
         try:
-            tools_result = await session.list_tools()
+            # If session is wrapped in dict, extract it
+            if isinstance(session, dict):
+                actual_session = session['session']
+            else:
+                actual_session = session
+
+            tools_result = await actual_session.list_tools()
+
             if not tools_result or not tools_result.tools:
                 logger.warning(f"No tools found in server: {server_name}")
                 return
@@ -787,23 +1070,29 @@ class SAMAgent:
             logger.error(f"Error registering tools from server {server_name}: {str(e)}")
 
     async def _execute_mcp_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
-        """Execute an MCP tool - THE MISSING METHOD!"""
+        """Execute an MCP tool"""
         if tool_name not in self.mcp_tools:
             return f"❌ MCP tool not found: {tool_name}"
 
         server_name, tool_info = self.mcp_tools[tool_name]
-        session = self.mcp_sessions.get(server_name)
+        session_data = self.mcp_sessions.get(server_name)
 
-        if not session:
+        if not session_data:
             return f"❌ MCP server {server_name} is not connected"
 
         try:
             print(f"\n🌐 Executing MCP tool: {tool_name} on server: {server_name}")
             start_time = time.time()
 
+            # Extract the actual session
+            if isinstance(session_data, dict):
+                session = session_data['session']
+            else:
+                session = session_data
+
             # Execute the tool via MCP
-            tool_result = await session.run_tool(tool_name, args)
-            result = tool_result.result
+            tool_result = await session.call_tool(tool_name, args)
+            result = tool_result.content
 
             execution_time = time.time() - start_time
             print(f"✅ MCP tool completed in {execution_time:.3f}s")
@@ -827,9 +1116,14 @@ class SAMAgent:
 
     async def disconnect_mcp_servers(self):
         """Disconnect from all MCP servers"""
-        for server_name, session in self.mcp_sessions.items():
+        for server_name, session_data in self.mcp_sessions.items():
             try:
-                await session.close()
+                if isinstance(session_data, dict) and 'transport' in session_data:
+                    # New format with transport manager
+                    await session_data['transport'].__aexit__(None, None, None)
+                elif hasattr(session_data, 'close'):
+                    # Old format - direct session
+                    await session_data.close()
                 logger.info(f"Disconnected from MCP server: {server_name}")
             except Exception as e:
                 logger.error(f"Error disconnecting from server {server_name}: {str(e)}")
