@@ -410,7 +410,6 @@ class SAMAgent:
             logger.error(f"❌ Startup error connecting to MCP server {server_name}: {str(e)}")
             return False
 
-
     def switch_provider(self, provider_name: str) -> str:
         """Switch between providers"""
         if provider_name not in self.raw_config.get('providers', {}):
@@ -424,7 +423,9 @@ class SAMAgent:
         if provider_name == 'claude':
             self.context_limit = provider_config.get('context_limit', 200000)
             self.model_name = provider_config.get('model_name', 'claude-sonnet-4-20250514')
-            # Claude doesn't need base_url update since it's handled in the completion method
+            self.base_url = "https://api.anthropic.com/v1"
+            self.api_key = provider_config.get('api_key', '')
+            # Claude doesn't need API-based context detection
         else:
             # For LMStudio, first set the fallback context limit from config
             # Try provider config first, then model config
@@ -432,18 +433,17 @@ class SAMAgent:
                                 self.raw_config.get('model', {}).get('context_limit', 20000))
             self.context_limit = fallback_context
 
+            # Update instance variables for LMStudio FIRST (before API calls)
+            self.base_url = provider_config.get('base_url', self.base_url)
+            self.api_key = provider_config.get('api_key', self.api_key)
+            self.model_name = provider_config.get('model_name', 'qwen2.5-coder-14b-instruct')
+
             # Try to get actual context length from API if enabled
             if self.raw_config.get('features', {}).get('use_loaded_context_length', True):
                 model_info = self._update_context_limit_from_api()
                 if not model_info:
                     # If API query failed, keep the fallback value
                     logger.info(f"📊 Using configured context limit: {self.context_limit:,} tokens")
-
-            self.model_name = provider_config.get('model_name', 'qwen2.5-coder-14b-instruct')
-
-            # Update instance variables for LMStudio
-            self.base_url = provider_config.get('base_url', self.base_url)
-            self.api_key = provider_config.get('api_key', self.api_key)
 
         return f"✅ Switched to {provider_name} provider (model: {self.model_name}, context: {self.context_limit:,})"
 
@@ -455,10 +455,12 @@ class SAMAgent:
 
     def _get_model_info(self):
         """Get model information from LMStudio API including loaded context length"""
-        # List of endpoints to try
+        # Simple endpoint construction
+        base_url_clean = self.base_url.rstrip('/v1').rstrip('/')
+
         endpoints_to_try = [
-            f"{self.base_url.replace('/v1', '')}/v1/models",  # OpenAI-compatible
-            f"{self.base_url.replace('/v1', '')}/api/v0/models"  # LMStudio REST API
+            f"{base_url_clean}/v1/models",  # Standard OpenAI v1
+            f"{base_url_clean}/api/v0/models",  # LMStudio REST API backup
         ]
 
         for endpoint_url in endpoints_to_try:
@@ -500,7 +502,7 @@ class SAMAgent:
                 continue
 
         # If we get here, none of the endpoints worked
-        logger.warning(f"⚠️  Could not get model info from any endpoint")
+        logger.warning(f"⚠️ Could not get model info from any endpoint")
         return None
 
     def _update_context_limit_from_api(self):
@@ -670,13 +672,21 @@ class SAMAgent:
             system_content = system_content.strip() if system_content else None
 
             # Create message with system prompt
-            response = client.messages.create(
-                model=model,
-                max_tokens=final_max_tokens,
-                temperature=final_temperature,
-                system=system_content,
-                messages=claude_messages
-            )
+            if system_content:  # Only pass system if it exists
+                response = client.messages.create(
+                    model=model,
+                    max_tokens=final_max_tokens,
+                    temperature=final_temperature,
+                    system=system_content,
+                    messages=claude_messages
+                )
+            else:  # No system content
+                response = client.messages.create(
+                    model=model,
+                    max_tokens=final_max_tokens,
+                    temperature=final_temperature,
+                    messages=claude_messages
+                )
 
             # Extract text response and ensure no trailing whitespace
             response_text = ""
@@ -793,10 +803,8 @@ class SAMAgent:
 
     async def _connect_stdio_mcp(self, server_name: str, server_path: str) -> bool:
         """Connect to a stdio MCP server - just test the connection and register tools"""
-        print(f"🔍 DEBUG: Testing connection to {server_name} at {server_path}")
 
         if not os.path.exists(server_path):
-            print(f"❌ DEBUG: File does not exist: {server_path}")
             return False
 
         try:
@@ -817,10 +825,7 @@ class SAMAgent:
             elif server_path.endswith('.exe'):
                 command = [server_path] + args
             else:
-                print(f"❌ DEBUG: Unsupported file type: {server_path}")
                 return False
-
-            print(f"🔍 DEBUG: Testing command: {command}")
 
             # Create server parameters
             server_params = StdioServerParameters(
@@ -835,8 +840,6 @@ class SAMAgent:
                     # Initialize the session
                     await session.initialize()
 
-                    print(f"✅ DEBUG: Test connection successful!")
-
                     # Get tools for registration
                     result = await session.list_tools()
 
@@ -850,20 +853,15 @@ class SAMAgent:
                             }
 
                             self.mcp_tools[tool.name] = (server_name, tool_info)
-                            print(f"✅ DEBUG: Registered MCP tool: {tool.name}")
-
-                        print(f"✅ DEBUG: Registered {len(result.tools)} tools")
 
                         # Don't store the session - we'll reconnect for each tool call
                         self.mcp_sessions[server_name] = "connection_tested"  # Just a marker
 
                         return True
                     else:
-                        print(f"⚠️ DEBUG: No tools found")
                         return False
 
         except Exception as e:
-            print(f"❌ DEBUG: Connection test failed: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -871,12 +869,9 @@ class SAMAgent:
     async def _register_mcp_tools_real(self, server_name: str, session):
         """Register tools using the REAL MCP client"""
         try:
-            print(f"🔍 DEBUG: Registering tools with REAL MCP client")
 
             # List tools using the real client
             result = await session.list_tools()
-
-            print(f"🔍 DEBUG: Got tools result: {result}")
 
             if result.tools:
                 for tool in result.tools:
@@ -888,14 +883,8 @@ class SAMAgent:
                     }
 
                     self.mcp_tools[tool.name] = (server_name, tool_info)
-                    print(f"✅ DEBUG: Registered real MCP tool: {tool.name}")
-
-                print(f"✅ DEBUG: Registered {len(result.tools)} tools from real MCP client")
-            else:
-                print(f"⚠️ DEBUG: No tools found from real MCP client")
 
         except Exception as e:
-            print(f"❌ DEBUG: Error registering real MCP tools: {e}")
             import traceback
             traceback.print_exc()
 
@@ -930,10 +919,6 @@ class SAMAgent:
             else:
                 return f"❌ Unsupported server file type: {server_path}"
 
-            print(f"🌐 Executing MCP tool with FRESH connection: {tool_name}")
-            print(f"🔍 DEBUG: Command: {command}")
-            print(f"🔍 DEBUG: Args: {args}")
-
             # Create server parameters
             server_params = StdioServerParameters(
                 command=command[0],
@@ -947,13 +932,8 @@ class SAMAgent:
                     # Initialize the session
                     await session.initialize()
 
-                    print(f"🔍 DEBUG: Fresh session initialized")
-
                     # Call the tool immediately
                     result = await session.call_tool(tool_name, args)
-
-                    print(f"🔍 DEBUG: Raw result type: {type(result)}")
-                    print(f"🔍 DEBUG: Raw result: {result}")
 
                     # Extract the result content properly
                     if hasattr(result, 'content') and result.content:
@@ -970,7 +950,6 @@ class SAMAgent:
                     else:
                         final_result = str(result)
 
-                    print(f"✅ DEBUG: Tool executed successfully, result length: {len(final_result)}")
                     return final_result
 
         except Exception as e:
@@ -1035,10 +1014,6 @@ class SAMAgent:
     async def _register_mcp_tools(self, server_name: str, session):
         """Register tools from an MCP server using official client"""
         try:
-            print(f"🔍 DEBUG: _register_mcp_tools called with:")
-            print(f"  server_name: {server_name} (type: {type(server_name)})")
-            print(f"  session: {session} (type: {type(session)})")
-
             # session should be the actual session object
             tools_result = await session.list_tools()
 
