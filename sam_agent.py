@@ -453,6 +453,38 @@ class SAMAgent:
         available = list(self.raw_config.get('providers', {}).keys())
         return f"📋 Current: {current} | Available: {', '.join(available)}"
 
+    def _format_claude_message_with_image(self, text_content: str, image_data: Optional[str] = None) -> Dict:
+        """Format message for Claude with optional image data"""
+        if not image_data:
+            return {"role": "user", "content": text_content}
+
+        # Claude format with image
+        return {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text_content},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": image_data
+                    }
+                }
+            ]
+        }
+
+    def _check_for_pending_image(self) -> Optional[str]:
+        """Check if computer control plugin has pending image data"""
+        if hasattr(self, 'plugin_manager'):
+            for plugin in self.plugin_manager.plugins.values():
+                if hasattr(plugin, '_pending_image_data'):
+                    image_data = plugin._pending_image_data
+                    # Clear it after retrieving
+                    delattr(plugin, '_pending_image_data')
+                    return image_data
+        return None
+
     def _get_model_info(self):
         """Get model information from LMStudio API including loaded context length"""
         # Simple endpoint construction
@@ -1386,10 +1418,17 @@ class SAMAgent:
             self.stop_message = ""
 
             # Add user message to conversation
-            self.conversation_history.append({
-                "role": "user",
-                "content": user_input
-            })
+            # Check for pending image data from computer control
+            pending_image = self._check_for_pending_image()
+            current_provider = self.raw_config.get('provider', 'lmstudio')
+
+            if pending_image and current_provider == 'claude':
+                user_message = self._format_claude_message_with_image(user_input, pending_image)
+                logger.info("📸 Including screenshot in message to Claude")
+            else:
+                user_message = {"role": "user", "content": user_input}
+
+            self.conversation_history.append(user_message)
 
             last_response = ""
             tool_call_count = 0  # Track total tool calls to prevent runaway execution

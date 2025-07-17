@@ -10,6 +10,16 @@ import time
 import platform
 from typing import Any, Dict, List, Optional, Tuple
 import traceback
+# Try to import PIL with fallback
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    Image = None
+
+import base64
+from io import BytesIO
 
 # Try to import required libraries with fallbacks
 try:
@@ -60,6 +70,12 @@ class ComputerControlPlugin(SAMPlugin):
     def register_tools(self, agent):
         """Register all computer control tools with the agent"""
 
+        # Store reference to agent for dynamic provider checking
+        self._agent = agent
+
+        # Store current provider for provider-specific behavior
+        self._current_provider = agent.raw_config.get('provider', 'unknown')
+
         # Mouse control tools
         agent.register_local_tool(
             self.move_mouse,
@@ -106,12 +122,6 @@ class ComputerControlPlugin(SAMPlugin):
 
         # Screen capture tools
         agent.register_local_tool(
-            self.take_screenshot,
-            category=ToolCategory.SYSTEM,
-            requires_approval=True
-        )
-
-        agent.register_local_tool(
             self.get_screen_size,
             category=ToolCategory.SYSTEM,
             requires_approval=False
@@ -122,6 +132,13 @@ class ComputerControlPlugin(SAMPlugin):
             self.check_dependencies,
             category=ToolCategory.UTILITY,
             requires_approval=False
+        )
+
+        # Add this to the register_tools method, after the existing screenshot tool
+        agent.register_local_tool(
+            self.take_screenshot_with_ai_integration,
+            category=ToolCategory.SYSTEM,
+            requires_approval=True
         )
 
     def _check_pyautogui(self) -> str:
@@ -322,37 +339,137 @@ class ComputerControlPlugin(SAMPlugin):
         except Exception as e:
             return f"❌ Error pressing key combination: {str(e)}"
 
-    def take_screenshot(self, filename: Optional[str] = None,
-                        region: Optional[Tuple[int, int, int, int]] = None) -> str:
+    def take_screenshot_for_ai(self, region: Optional[Tuple[int, int, int, int]] = None,
+                               compress_quality: int = 50, max_size_kb: int = 100) -> Dict[str, Any]:
         """
-        Take a screenshot of the screen.
+        Take a screenshot of the primary monitor optimized for AI consumption.
 
         Args:
-            filename: Optional filename to save screenshot
-            region: Optional region tuple (left, top, width, height)
+            region: Optional region tuple (left, top, width, height) relative to primary monitor
+            compress_quality: JPEG compression quality (1-100, lower = more compression)
+            max_size_kb: Maximum size in KB for the compressed image
 
         Returns:
-            Success message or error
+            Dict with 'success', 'file_path', 'base64_data', 'width', 'height'
         """
         error = self._check_pyautogui()
         if error:
-            return error
+            return {"success": False, "error": error}
+
+        if not PIL_AVAILABLE:
+            return {"success": False, "error": "❌ PIL/Pillow not available. Install with: pip install Pillow"}
 
         try:
-            if filename is None:
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                filename = f"screenshot_{timestamp}.png"
+            # Get primary monitor dimensions
+            import tkinter as tk
+            root = tk.Tk()
+            primary_width = root.winfo_screenwidth()
+            primary_height = root.winfo_screenheight()
+            root.destroy()
 
+            # Take screenshot of primary monitor only
             if region:
+                # Region is relative to primary monitor
                 screenshot = pyautogui.screenshot(region=region)
             else:
-                screenshot = pyautogui.screenshot()
+                # Screenshot just the primary monitor (0,0 to primary_width, primary_height)
+                screenshot = pyautogui.screenshot(region=(0, 0, primary_width, primary_height))
 
+            # Save original
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"screenshot_primary_{timestamp}.png"
             screenshot.save(filename)
-            self._log_action("SCREENSHOT", f"saved as '{filename}'")
-            return f"📸 Screenshot saved as '{filename}'"
+
+            # Convert to RGB if needed (removes transparency)
+            if screenshot.mode in ('RGBA', 'LA'):
+                background = Image.new('RGB', screenshot.size, (255, 255, 255))
+                background.paste(screenshot, mask=screenshot.split()[-1] if screenshot.mode == 'RGBA' else None)
+                screenshot = background
+
+            # Resize if still too large (reduce resolution to save space)
+            max_dimension = 1920  # Max width or height
+            if screenshot.width > max_dimension or screenshot.height > max_dimension:
+                ratio = min(max_dimension / screenshot.width, max_dimension / screenshot.height)
+                new_size = (int(screenshot.width * ratio), int(screenshot.height * ratio))
+                screenshot = screenshot.resize(new_size, Image.Resampling.LANCZOS)
+
+            # Compress with multiple attempts to stay under size limit
+            max_size_bytes = max_size_kb * 1024
+            quality = compress_quality
+
+            while quality > 10:  # Don't go below quality 10
+                compressed_io = BytesIO()
+                screenshot.save(compressed_io, format='JPEG', quality=quality, optimize=True)
+                compressed_data = compressed_io.getvalue()
+
+                if len(compressed_data) <= max_size_bytes:
+                    break
+
+                quality -= 10  # Reduce quality more aggressively
+
+            # If still too big, resize further
+            if len(compressed_data) > max_size_bytes and quality <= 10:
+                # Try smaller resolution
+                smaller_size = (screenshot.width // 2, screenshot.height // 2)
+                screenshot = screenshot.resize(smaller_size, Image.Resampling.LANCZOS)
+
+                compressed_io = BytesIO()
+                screenshot.save(compressed_io, format='JPEG', quality=30, optimize=True)
+                compressed_data = compressed_io.getvalue()
+
+            # Base64 encode
+            base64_data = base64.b64encode(compressed_data).decode('utf-8')
+
+            # Estimate token count (rough: 1 token ≈ 1.5 base64 chars for images)
+            estimated_tokens = len(base64_data) // 1.5
+
+            self._log_action("SCREENSHOT_AI",
+                             f"primary monitor saved as '{filename}', {len(compressed_data):,} bytes, "
+                             f"~{estimated_tokens:,.0f} tokens, quality={quality}")
+
+            return {
+                "success": True,
+                "file_path": filename,
+                "base64_data": base64_data,
+                "width": screenshot.width,
+                "height": screenshot.height,
+                "compressed_size": len(compressed_data),
+                "base64_size": len(base64_data),
+                "estimated_tokens": int(estimated_tokens),
+                "final_quality": quality,
+                "monitor": "primary"
+            }
+
         except Exception as e:
-            return f"❌ Error taking screenshot: {str(e)}"
+            return {"success": False, "error": f"Error taking primary monitor screenshot: {str(e)}"}
+
+    def take_screenshot_with_ai_integration(self, region: Optional[Tuple[int, int, int, int]] = None,
+                                            include_in_next_message: bool = True) -> str:
+        """
+        Take screenshot and optionally prepare it for AI consumption based on current provider.
+        """
+        screenshot_result = self.take_screenshot_for_ai(region=region)
+
+        if not screenshot_result["success"]:
+            return screenshot_result["error"]
+
+        # Get current provider dynamically from agent
+        current_provider = getattr(self, '_agent', None)
+        if current_provider:
+            current_provider = current_provider.raw_config.get('provider', 'unknown')
+        else:
+            current_provider = 'unknown'
+
+        if include_in_next_message and current_provider == 'claude':
+            # Store the base64 data for the next message
+            self._pending_image_data = screenshot_result["base64_data"]
+            return (f"📸 Screenshot taken and prepared for Claude! "
+                    f"File: {screenshot_result['file_path']} "
+                    f"(Compressed: {screenshot_result['compressed_size']:,} bytes)")
+        else:
+            provider_msg = f" (Provider: {current_provider} - image data not sent)" if current_provider != 'claude' else ""
+            return f"📸 Screenshot saved: {screenshot_result['file_path']}{provider_msg}"
+
 
     def get_screen_size(self) -> str:
         """
