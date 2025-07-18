@@ -17,6 +17,7 @@ import signal
 from datetime import datetime, timedelta
 from io import StringIO
 from pathlib import Path
+from time import sleep
 from typing import Any, Dict, List, Optional
 import inspect
 import ast
@@ -39,6 +40,12 @@ class CoreToolsPlugin(SAMPlugin):
 
     def register_tools(self, agent):
         """Register all core tools with the agent"""
+
+        agent.register_local_tool(
+            self.sleep,
+            category=ToolCategory.SYSTEM,
+            requires_approval=False
+        )
 
         agent.register_local_tool(
             self.execute_code,
@@ -108,6 +115,11 @@ class CoreToolsPlugin(SAMPlugin):
                 return self._execute_powershell_code(code)
         except Exception as e:
             return f"❌ Execution error: {str(e)}"
+
+    def sleep(self, seconds):
+        """Sleep for provided number of seconds"""
+        sleep(seconds)
+        return f"System slept for {seconds} seconds"
 
     def _execute_python_code(self, code: str, timeout: int = 30) -> str:
         """Execute Python code with proper import support"""
