@@ -15,7 +15,7 @@ import os
 import sys
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple, NamedTuple
 from enum import Enum
 
 # Import configuration
@@ -46,6 +46,247 @@ except ImportError:
     logger.warning("FastAPI not available - API server functionality disabled")
 
 
+class InterventionType(Enum):
+    TOKEN_LIMIT_BREACH = "token_limit_breach"
+    TOOL_LOOP_DETECTED = "tool_loop_detected"
+    PROGRESS_STAGNATION = "progress_stagnation"
+    HIGH_ERROR_RATE = "high_error_rate"
+    EMERGENCY_STOP = "emergency_stop"
+
+
+@dataclass
+class System1State:
+    """Current state metrics for System 1"""
+    token_usage_percent: float = 0.0
+    consecutive_identical_tools: int = 0
+    tools_without_progress: int = 0
+    recent_error_rate: float = 0.0
+    total_tool_calls: int = 0
+    iteration_count: int = 0
+    last_tool_calls: List[str] = None
+
+    def __post_init__(self):
+        if self.last_tool_calls is None:
+            self.last_tool_calls = []
+
+
+class InterventionResult(NamedTuple):
+    """Result of a System 2 intervention"""
+    success: bool
+    action_taken: str
+    should_break_execution: bool
+    modified_context: bool
+    message: str
+
+
+class System2Agent:
+    """Metacognitive supervisor for System 1 agent"""
+
+    def __init__(self, system1_agent):
+        self.system1 = system1_agent
+        self.intervention_history = []
+        self.metrics_history = []
+
+        # Thresholds for intervention
+        self.token_threshold = 0.75  # 75% of context limit
+        self.consecutive_tool_threshold = 5  # Same tool 5+ times
+        self.stagnation_threshold = 8  # 8+ tools without progress
+        self.error_rate_threshold = 0.4  # 40% tool failure rate
+
+        # System 2 exclusive tools (separate from System 1)
+        self.system2_tools = {}
+        self.system2_tool_info = {}
+
+        logger.info("System 2 metacognitive agent initialized")
+
+    def should_intervene(self, system1_state: System1State) -> Tuple[bool, str]:
+        """Determine if System 2 intervention is needed"""
+        reasons = []
+
+        # Token usage check
+        if system1_state.token_usage_percent > self.token_threshold:
+            reasons.append(InterventionType.TOKEN_LIMIT_BREACH.value)
+
+        # Loop detection
+        if system1_state.consecutive_identical_tools >= self.consecutive_tool_threshold:
+            reasons.append(InterventionType.TOOL_LOOP_DETECTED.value)
+
+        # Stagnation check
+        if system1_state.tools_without_progress >= self.stagnation_threshold:
+            reasons.append(InterventionType.PROGRESS_STAGNATION.value)
+
+        # Error rate check
+        if system1_state.recent_error_rate > self.error_rate_threshold:
+            reasons.append(InterventionType.HIGH_ERROR_RATE.value)
+
+        return len(reasons) > 0, ", ".join(reasons)
+
+    def intervene(self, intervention_types: str, system1_state: System1State) -> InterventionResult:
+        """Perform metacognitive intervention"""
+        intervention_time = time.time()
+        intervention_list = intervention_types.split(", ")
+
+        logger.info(f"🧠 System 2 intervention triggered: {intervention_types}")
+
+        actions_taken = []
+        context_modified = False
+        should_break = False
+
+        # Handle each intervention type
+        for intervention_type in intervention_list:
+            if intervention_type == InterventionType.TOKEN_LIMIT_BREACH.value:
+                result = self._handle_token_limit_breach()
+                actions_taken.append("context_compression")
+                context_modified = True
+
+            elif intervention_type == InterventionType.TOOL_LOOP_DETECTED.value:
+                result = self._handle_tool_loop(system1_state)
+                actions_taken.append("loop_breaking")
+                should_break = True
+
+            elif intervention_type == InterventionType.PROGRESS_STAGNATION.value:
+                result = self._handle_stagnation(system1_state)
+                actions_taken.append("approach_change")
+
+            elif intervention_type == InterventionType.HIGH_ERROR_RATE.value:
+                result = self._handle_high_errors(system1_state)
+                actions_taken.append("error_mitigation")
+
+        # Record intervention
+        self.intervention_history.append({
+            "timestamp": intervention_time,
+            "types": intervention_list,
+            "actions": actions_taken,
+            "system1_state": system1_state,
+            "success": True
+        })
+
+        message = f"System 2 intervention: {', '.join(actions_taken)}"
+
+        return InterventionResult(
+            success=True,
+            action_taken=", ".join(actions_taken),
+            should_break_execution=should_break,
+            modified_context=context_modified,
+            message=message
+        )
+
+    def _handle_token_limit_breach(self) -> bool:
+        """Handle context token limit breach"""
+        logger.info("🧠 System 2: Compressing context due to token limit")
+
+        # Intelligent context compression
+        original_length = len(self.system1.conversation_history)
+
+        # Keep system message and last few exchanges
+        if original_length > 5:
+            system_msg = self.system1.conversation_history[0]
+            recent_msgs = self.system1.conversation_history[-4:]  # Last 4 messages
+
+            # Create summary of middle content
+            middle_content = self.system1.conversation_history[1:-4]
+            if middle_content:
+                summary = self._compress_conversation_segment(middle_content)
+                summary_msg = {
+                    "role": "system",
+                    "content": f"[CONTEXT SUMMARY] Previous conversation included: {summary}"
+                }
+
+                # Rebuild conversation with compression
+                self.system1.conversation_history = [system_msg, summary_msg] + recent_msgs
+
+                logger.info(f"🧠 Compressed {original_length} messages to {len(self.system1.conversation_history)}")
+                return True
+
+        return False
+
+    def _handle_tool_loop(self, state: System1State) -> bool:
+        """Handle detected tool execution loop"""
+        logger.info(f"🧠 System 2: Breaking tool loop (last tool repeated {state.consecutive_identical_tools} times)")
+
+        # Inject loop-breaking guidance into System 1's context
+        loop_breaking_msg = {
+            "role": "system",
+            "content": f"<metacognitive_guidance>You have been using the same tool repeatedly ({state.consecutive_identical_tools} times). This suggests the current approach isn't working. Please try a different strategy or ask the user for clarification instead of repeating the same tool calls.</metacognitive_guidance>"
+        }
+
+        self.system1.conversation_history.append(loop_breaking_msg)
+        return True
+
+    def _handle_stagnation(self, state: System1State) -> bool:
+        """Handle progress stagnation"""
+        logger.info(f"🧠 System 2: Addressing stagnation ({state.tools_without_progress} tools without progress)")
+
+        guidance_msg = {
+            "role": "system",
+            "content": f"<metacognitive_guidance>You have executed {state.tools_without_progress} tools but may not be making progress toward the user's goal. Consider: 1) Asking the user for clarification, 2) Summarizing what you've learned so far, 3) Trying a completely different approach.</metacognitive_guidance>"
+        }
+
+        self.system1.conversation_history.append(guidance_msg)
+        return True
+
+    def _handle_high_errors(self, state: System1State) -> bool:
+        """Handle high error rate"""
+        logger.info(f"🧠 System 2: Mitigating high error rate ({state.recent_error_rate:.1%})")
+
+        error_msg = {
+            "role": "system",
+            "content": f"<metacognitive_guidance>Recent tool executions have a high error rate ({state.recent_error_rate:.1%}). Consider using simpler, more reliable tools or breaking down the task into smaller steps.</metacognitive_guidance>"
+        }
+
+        self.system1.conversation_history.append(error_msg)
+        return True
+
+    def _compress_conversation_segment(self, messages: List[Dict]) -> str:
+        """Create intelligent summary of conversation segment"""
+        # Extract key information from the messages
+        user_requests = []
+        tool_results = []
+
+        for msg in messages:
+            content = msg.get("content", "")
+            if msg.get("role") == "user":
+                if not content.startswith("Tool ") and not content.startswith("Here are the results"):
+                    user_requests.append(content[:100])  # First 100 chars
+            elif msg.get("role") == "assistant":
+                if "tool" not in content.lower():
+                    # This is likely a regular response, not tool usage
+                    pass
+
+        summary_parts = []
+        if user_requests:
+            summary_parts.append(f"User requests: {'; '.join(user_requests)}")
+
+        return ". ".join(summary_parts) if summary_parts else "Various tool executions and exchanges"
+
+    def update_metrics(self, system1_state: System1State):
+        """Update metrics tracking for System 1"""
+        self.metrics_history.append({
+            "timestamp": time.time(),
+            "state": system1_state
+        })
+
+        # Keep only last 100 metrics entries
+        if len(self.metrics_history) > 100:
+            self.metrics_history = self.metrics_history[-100:]
+
+    def get_intervention_stats(self) -> Dict[str, Any]:
+        """Get statistics about System 2 interventions"""
+        if not self.intervention_history:
+            return {"total_interventions": 0}
+
+        intervention_types = {}
+        for intervention in self.intervention_history:
+            for itype in intervention["types"]:
+                intervention_types[itype] = intervention_types.get(itype, 0) + 1
+
+        return {
+            "total_interventions": len(self.intervention_history),
+            "intervention_types": intervention_types,
+            "last_intervention": self.intervention_history[-1]["timestamp"] if self.intervention_history else None
+        }
+
+
 # Tool categories
 class ToolCategory(Enum):
     UTILITY = "utility"
@@ -71,13 +312,14 @@ class ToolInfo:
 
 
 def load_all_plugins(sam):
-    """Auto-load all plugins from the plugins directory"""
+    """Enhanced plugin loading with System 2 support"""
     plugins_dir = Path(__file__).parent / "plugins"
     if not plugins_dir.exists():
         print("⚠️ Plugins directory not found")
         return
 
     loaded_count = 0
+    system2_plugins_count = 0
     print(f"🔍 Scanning for plugins in {plugins_dir}")
 
     # Load all .py files in plugins directory
@@ -88,8 +330,23 @@ def load_all_plugins(sam):
         if sam.plugin_manager.load_plugin_from_file(str(plugin_file), sam):
             loaded_count += 1
 
+            # Check if this was a System 2 plugin
+            plugin_name = plugin_file.stem
+            if plugin_name in sam.plugin_manager.plugins:
+                plugin = sam.plugin_manager.plugins[plugin_name]
+                if hasattr(plugin, 'restricted') and plugin.restricted:
+                    system2_plugins_count += 1
+
     if loaded_count > 0:
-        print(f"📦 Loaded {loaded_count} plugins, {len(sam.local_tools)} total tools")
+        system1_tools = len(sam.local_tools)
+        system2_tools = len(sam.system2_tools)
+        total_tools = system1_tools + system2_tools
+
+        print(f"📦 Loaded {loaded_count} plugins, {total_tools} total tools")
+        print(f"🤖 System 1 tools: {system1_tools}")
+        print(f"🧠 System 2 tools: {system2_tools}")
+        if system2_plugins_count > 0:
+            print(f"🔒 System 2 plugins: {system2_plugins_count}")
 
 # ===== PLUGIN SYSTEM =====
 class SAMPlugin:
@@ -277,10 +534,15 @@ class SAMAgent:
         self.stop_requested = False
         self.stop_message = ""
 
-        # Tool management
+        # System 1 tool management
         self.local_tools = {}
         self.tool_info = {}
         self.tools_by_category = {category: [] for category in ToolCategory}
+
+        # ===== NEW: SYSTEM 2 EXCLUSIVE TOOL REGISTRIES =====
+        self.system2_tools = {}
+        self.system2_tool_info = {}
+        self.system2_tools_by_category = {category: [] for category in ToolCategory}
 
         # MCP (Model Context Protocol) support
         self.mcp_sessions = {}
@@ -289,7 +551,17 @@ class SAMAgent:
         # Plugin system
         self.plugin_manager = PluginManager()
 
-        logger.info(f"SAM Agent initialized with model: {self.model_name}")
+        # ===== NEW: SYSTEM 2 INTEGRATION =====
+        self.system2 = System2Agent(self)
+        self.execution_metrics = {
+            "consecutive_tool_count": 0,
+            "last_tool_name": None,
+            "tool_error_count": 0,
+            "total_tool_count": 0,
+            "tools_since_progress": 0
+        }
+
+        logger.info(f"SAM Agent initialized with System 1/System 2 architecture - Model: {self.model_name}")
         logger.info(f"Context limit: {self.context_limit:,} tokens")
         logger.info(f"Safety mode: {'ON' if self.safety_mode else 'OFF'}")
 
@@ -1270,6 +1542,59 @@ class SAMAgent:
             logger.error(f"Failed to register tool {func_name}: {str(e)}")
             print(f"❌ Failed to register tool {func_name}: {str(e)}")
 
+    def register_system2_tool(self, function: Callable, category: ToolCategory = ToolCategory.UTILITY,
+                              requires_approval: bool = False):
+        """Register a tool exclusively for System 2 metacognitive agent"""
+        func_name = function.__name__
+
+        # Get function signature and documentation
+        sig = inspect.signature(function)
+        doc = inspect.getdoc(function) or f"Function {func_name}"
+
+        # Build parameters dictionary
+        parameters = {}
+        for param_name, param in sig.parameters.items():
+            param_info = {"description": f"Parameter {param_name}"}
+
+            # Add type information if available
+            if param.annotation != inspect.Parameter.empty:
+                param_info["type"] = str(param.annotation.__name__)
+
+            # Add default value if available
+            if param.default != inspect.Parameter.empty:
+                param_info["default"] = param.default
+
+            parameters[param_name] = param_info
+
+        try:
+            # Store System 2 tool information
+            self.system2_tool_info[func_name] = ToolInfo(
+                function=function,
+                description=doc,
+                parameters=parameters,
+                category=category,
+                requires_approval=requires_approval
+            )
+
+            # Store callable function in System 2 registry
+            self.system2_tools[func_name] = {
+                "function": function,
+                "category": category.value,
+                "requires_approval": requires_approval
+            }
+
+            # Add to System 2 category tracking
+            if category not in self.system2_tools_by_category:
+                self.system2_tools_by_category[category] = []
+            self.system2_tools_by_category[category].append(func_name)
+
+            logger.info(f"🧠 Registered System 2 tool: {func_name} ({category.value})")
+
+        except Exception as e:
+            logger.error(f"Failed to register System 2 tool {func_name}: {str(e)}")
+            print(f"❌ Failed to register System 2 tool {func_name}: {str(e)}")
+
+
     def get_tools_by_category(self, category: ToolCategory) -> List[str]:
         """Get all tools in a specific category"""
         return self.tools_by_category[category].copy()
@@ -1392,7 +1717,7 @@ class SAMAgent:
 
     async def run(self, user_input: str, max_iterations: int = 5,
                   verbose: bool = False) -> str:
-        """Main execution loop with safety controls"""
+        """Main execution loop with System 2 metacognitive monitoring"""
         try:
             # Ensure MCP auto-connection happens on first run
             await self._ensure_mcp_auto_connect()
@@ -1414,6 +1739,16 @@ class SAMAgent:
             self.stop_requested = False
             self.stop_message = ""
 
+            # ===== RESET SYSTEM 2 METRICS FOR NEW REQUEST =====
+            self.execution_metrics = {
+                "consecutive_tool_count": 0,
+                "last_tool_name": None,
+                "tool_error_count": 0,
+                "total_tool_count": 0,
+                "tools_since_progress": 0,
+                "recent_tools": []
+            }
+
             # Add user message to conversation
             # Check for pending image data from computer control
             pending_image = self._check_for_pending_image()
@@ -1434,6 +1769,38 @@ class SAMAgent:
                 if verbose:
                     print(f"\n🔄 Iteration {iteration + 1}/{max_iterations}")
 
+                # ===== SYSTEM 2 INTERVENTION POINT =====
+                # Calculate current System 1 state
+                current_tokens = sum(self._estimate_token_count(msg.get('content', ''))
+                                     for msg in self.conversation_history)
+                token_usage_percent = current_tokens / self.context_limit
+
+                system1_state = System1State(
+                    token_usage_percent=token_usage_percent,
+                    consecutive_identical_tools=self.execution_metrics["consecutive_tool_count"],
+                    tools_without_progress=self.execution_metrics["tools_since_progress"],
+                    recent_error_rate=self._calculate_recent_error_rate(),
+                    total_tool_calls=self.execution_metrics["total_tool_count"],
+                    iteration_count=iteration,
+                    last_tool_calls=list(self.execution_metrics.get("recent_tools", []))
+                )
+
+                # Check if System 2 needs to intervene
+                should_intervene, reasons = self.system2.should_intervene(system1_state)
+
+                if should_intervene:
+                    intervention_result = self.system2.intervene(reasons, system1_state)
+
+                    if verbose:
+                        print(f"🧠 {intervention_result.message}")
+
+                    if intervention_result.should_break_execution:
+                        print("🛑 System 2 requesting execution halt to break loop")
+                        break
+
+                    # Update metrics after intervention
+                    self.system2.update_metrics(system1_state)
+
                 # Build available tools context
                 tools_context = self._build_tools_context()
 
@@ -1443,19 +1810,19 @@ class SAMAgent:
                         "role": "system",
                         "content": f"""You are SAM (Secret Agent Man), an AI assistant with access to tools for various tasks.
 
-CRITICAL TOOL USAGE INSTRUCTIONS:
-- When you need to use a tool, respond with a JSON object in this EXACT format:
-{{"name": "tool_name", "arguments": {{"param1": "value1", "param2": "value2"}}}}
-- Put the JSON in a code block with ```json
-- Use tools whenever they would be helpful for the user's request
-- Always provide the tool call first, then explain what you're doing
-- For multiple tools, use separate JSON objects in separate code blocks
-- When you receive tool results from the user, respond naturally about what you found
+    CRITICAL TOOL USAGE INSTRUCTIONS:
+    - When you need to use a tool, respond with a JSON object in this EXACT format:
+    {{"name": "tool_name", "arguments": {{"param1": "value1", "param2": "value2"}}}}
+    - Put the JSON in a code block with ```json
+    - Use tools whenever they would be helpful for the user's request
+    - Always provide the tool call first, then explain what you're doing
+    - For multiple tools, use separate JSON objects in separate code blocks
+    - When you receive tool results from the user, respond naturally about what you found
 
-{tools_context}
+    {tools_context}
 
-Current safety settings: {self.get_safety_status()}
-{self.stop_message}"""
+    Current safety settings: {self.get_safety_status()}
+    {self.stop_message}"""
                     }
                 ]
 
@@ -1494,7 +1861,7 @@ Current safety settings: {self.get_safety_status()}
                     "content": response
                 })
 
-                # Execute tools and collect results
+                # ===== ENHANCED TOOL EXECUTION WITH SYSTEM 2 TRACKING =====
                 tool_results = []
                 for tool_call in tool_calls:
                     if self.stop_requested:
@@ -1503,13 +1870,38 @@ Current safety settings: {self.get_safety_status()}
                     tool_name = tool_call.get("name", "")
                     tool_args = tool_call.get("arguments", {})
 
+                    # ===== SYSTEM 2 TRACKING: Update consecutive tool tracking =====
+                    if tool_name == self.execution_metrics["last_tool_name"]:
+                        self.execution_metrics["consecutive_tool_count"] += 1
+                    else:
+                        self.execution_metrics["consecutive_tool_count"] = 1
+                        self.execution_metrics["last_tool_name"] = tool_name
+
+                    # ===== SYSTEM 2 TRACKING: Track recent tools for pattern analysis =====
+                    recent_tools = self.execution_metrics.get("recent_tools", [])
+                    recent_tools.append(tool_name)
+                    if len(recent_tools) > 10:  # Keep last 10 tools
+                        recent_tools = recent_tools[-10:]
+                    self.execution_metrics["recent_tools"] = recent_tools
+
                     if verbose:
                         print(f"\n🔧 Executing: {tool_name}")
 
+                    # ===== ENHANCED TOOL EXECUTION WITH ERROR TRACKING =====
                     try:
                         result = await self._execute_tool(tool_name, tool_args)
+
+                        # ===== SYSTEM 2 TRACKING: Success metrics =====
                         tool_results.append(f"Tool '{tool_name}' executed successfully:\n{result}")
+                        self.execution_metrics["total_tool_count"] += 1
                         tool_call_count += 1
+
+                        # Reset tools since progress if we got a good result
+                        if ("successfully" in result.lower() or "✅" in result or
+                                "completed" in result.lower() or "found" in result.lower()):
+                            self.execution_metrics["tools_since_progress"] = 0
+                        else:
+                            self.execution_metrics["tools_since_progress"] += 1
 
                         # Safety limit on tool calls
                         if tool_call_count >= 10:
@@ -1517,8 +1909,11 @@ Current safety settings: {self.get_safety_status()}
                             break
 
                     except Exception as e:
+                        # ===== SYSTEM 2 TRACKING: Error metrics =====
                         error_msg = f"Tool '{tool_name}' failed: {str(e)}"
                         tool_results.append(error_msg)
+                        self.execution_metrics["tool_error_count"] += 1
+                        self.execution_metrics["tools_since_progress"] += 1
                         logger.error(error_msg)
 
                 # Feed tool results back to LLM as a "user" message (simulating human providing results)
@@ -1543,14 +1938,24 @@ Current safety settings: {self.get_safety_status()}
             logger.error(f"Error in run: {str(e)}")
             return f"❌ Error: {str(e)}"
 
+    def _calculate_recent_error_rate(self) -> float:
+        """Calculate error rate for recent tool executions"""
+        total_tools = self.execution_metrics["total_tool_count"]
+        error_count = self.execution_metrics["tool_error_count"]
+
+        if total_tools == 0:
+            return 0.0
+
+        return error_count / total_tools
+
     def _build_tools_context(self) -> str:
-        """Build the available tools context for the LLM"""
+        """Build the available tools context for System 1 LLM (excludes System 2 tools)"""
         if not self.local_tools and not self.mcp_tools:
             return "\n\n<available_tools>\nNo tools available.\n</available_tools>"
 
         tools_list = []
 
-        # Add local tools
+        # Add ONLY System 1 local tools (exclude System 2 tools)
         for tool_name, tool_data in self.local_tools.items():
             tool_info = self.tool_info.get(tool_name)
             if tool_info:
@@ -1565,13 +1970,13 @@ Current safety settings: {self.get_safety_status()}
 
         tools_context = f"""
 
-<available_tools>
-Available tools ({len(tools_list)} total):
-{chr(10).join(tools_list)}
+    <available_tools>
+    Available tools ({len(tools_list)} total):
+    {chr(10).join(tools_list)}
 
-Local tools: {len(self.local_tools)}
-MCP tools: {len(self.mcp_tools)} from {len(self.mcp_sessions)} servers
-</available_tools>"""
+    System 1 tools: {len(self.local_tools)} local, {len(self.mcp_tools)} MCP
+    System 2 tools: {len(self.system2_tools)} (metacognitive - not accessible)
+    </available_tools>"""
 
         return tools_context
 
@@ -1638,6 +2043,30 @@ MCP tools: {len(self.mcp_tools)} from {len(self.mcp_sessions)} servers
             "mcp_servers": self.list_mcp_servers(),
             "total_count": len(local_tools) + len(mcp_tools)
         }
+
+    def list_system2_tools(self) -> str:
+        """List all System 2 exclusive tools"""
+        if not self.system2_tools:
+            return "🧠 No System 2 tools available"
+
+        result = "🧠 **SYSTEM 2 EXCLUSIVE TOOLS**\n\n"
+
+        for category in ToolCategory:
+            category_tools = self.system2_tools_by_category.get(category, [])
+            if category_tools:
+                result += f"📂 **{category.value.upper()}**\n"
+                for tool_name in category_tools:
+                    tool_info = self.system2_tool_info.get(tool_name)
+                    if tool_info:
+                        result += f"  🔧 {tool_name}: {tool_info.description}\n"
+                    else:
+                        result += f"  🔧 {tool_name}: No description\n"
+                result += "\n"
+
+        result += f"📊 **Total System 2 tools:** {len(self.system2_tools)}\n"
+        result += "🔒 **Note:** These tools are exclusively available to the System 2 metacognitive agent"
+
+        return result
 
 
 # ===== CLI INTERFACE =====
@@ -1713,7 +2142,7 @@ def main():
 
     # Interactive loop
     print(f"\n=== 🖥️ SAM Agent Interactive Mode ===")
-    print("Type 'exit' to quit, 'tools' to list available tools")
+    print("Type 'exit' to quit, 'tools' to list available tools, 'tools2' for System 2 tools")
     print("Commands: 'debug' (toggle debug), 'reset' (clear history), 'tools' (list tools)")
     print("Providers: 'provider claude/lmstudio', 'providers' (list available)")
     print("Safety: 'safety on/off', 'auto on/off', 'safety' (status)")
@@ -1771,11 +2200,15 @@ def main():
                 print("🔄 Conversation history cleared")
                 continue
 
+
             elif user_input.lower() == 'tools':
                 # List tools with current usage counts
                 current_tools = sam.list_tools()
-                total_count = len(current_tools.get('local_tools', {})) + len(current_tools.get('mcp_tools', {}))
+                system1_count = len(current_tools.get('local_tools', {})) + len(current_tools.get('mcp_tools', {}))
+                system2_count = len(sam.system2_tools)
+                total_count = system1_count + system2_count
                 print(f"\n🔧 Available Tools ({total_count} total):")
+                print(f"🤖 System 1: {system1_count} tools | 🧠 System 2: {system2_count} tools")
 
                 # Local tools
                 for name, info in current_tools.get('local_tools', {}).items():
@@ -1793,6 +2226,14 @@ def main():
                         description = info.get('description', 'No description')
                         print(f"  🌐 {name}: {description} (Server: {server})")
                 continue
+
+
+            elif user_input.lower() == 'tools2':
+                # List System 2 exclusive tools
+                system2_info = sam.list_system2_tools()
+                print(system2_info)
+                continue
+
 
             # Handle MCP-specific commands
             elif user_input.lower().startswith('mcp '):
