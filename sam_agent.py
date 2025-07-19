@@ -89,7 +89,7 @@ class System2Agent:
 
         # Thresholds for intervention
         self.token_threshold = 0.75  # 75% of context limit
-        self.consecutive_tool_threshold = 6  # Same tool 5+ times
+        self.consecutive_tool_threshold = 6  # Same tool 6+ times
         self.stagnation_threshold = 8  # 8+ tools without progress
         self.error_rate_threshold = 0.4  # 40% tool failure rate
 
@@ -204,10 +204,10 @@ class System2Agent:
         """Handle detected tool execution loop"""
         logger.info(f"🧠 System 2: Breaking tool loop (last tool repeated {state.consecutive_identical_tools} times)")
 
-        # Inject loop-breaking guidance into System 1's context
+        # Inject enhanced loop-breaking guidance into System 1's context
         loop_breaking_msg = {
             "role": "system",
-            "content": f"<metacognitive_guidance>You have been using the same tool repeatedly ({state.consecutive_identical_tools} times). This suggests the current approach isn't working. Please try a different strategy or ask the user for clarification instead of repeating the same tool calls.</metacognitive_guidance>"
+            "content": f"<metacognitive_intervention>SYSTEM 2 INTERVENTION: Tool execution loop detected. You have used the same tool {state.consecutive_identical_tools} times consecutively, which indicates repetitive behavior that may not be making progress toward the user's goal. Execution has been halted to prevent inefficiency. Please acknowledge this intervention and provide a summary of what was accomplished rather than attempting to continue with additional tool calls. Consider: 1) What progress was made? 2) Whether the user's goal was achieved? 3) If not, what alternative approaches might work better?</metacognitive_intervention>"
         }
 
         self.system1.conversation_history.append(loop_breaking_msg)
@@ -1804,10 +1804,25 @@ class SAMAgent:
 
                     if intervention_result.should_break_execution:
                         print("🛑 System 2 requesting execution halt to break loop")
-                        # ===== NEW: SET PERSISTENT HALT FLAG =====
                         self.system2_halt_requested = True
                         self.system2_halt_reason = intervention_result.message
-                        break
+
+                        # ===== FIX: INFORM SYSTEM 1 ABOUT PRE-ITERATION INTERVENTION =====
+                        intervention_message = (
+                            f"🧠 **METACOGNITIVE INTERVENTION**: System 2 has detected a tool execution loop "
+                            f"and has halted further execution to prevent inefficiency. "
+                            f"You have been using the same tool {system1_state.consecutive_identical_tools} times consecutively. "
+                            f"Please acknowledge this intervention and provide a summary of what was accomplished "
+                            f"rather than attempting additional tool calls."
+                        )
+
+                        self.conversation_history.append({
+                            "role": "user",
+                            "content": intervention_message
+                        })
+
+                        # Don't break immediately - let System 1 respond to the intervention
+                        # The loop will end naturally since no more tool calls will be generated
 
                     # Update metrics after intervention
                     self.system2.update_metrics(system1_state)
@@ -1835,6 +1850,12 @@ class SAMAgent:
     - Always provide the tool call first, then explain what you're doing
     - For multiple tools, use separate JSON objects in separate code blocks
     - When you receive tool results from the user, respond naturally about what you found
+
+    METACOGNITIVE FRAMEWORK:
+    - You are monitored by System 2, a metacognitive agent that watches for inefficient patterns
+    - If you use the same tool repeatedly, System 2 may halt execution to prevent loops
+    - If System 2 intervenes, acknowledge the intervention and summarize what was accomplished
+    - Do not attempt to continue with halted tool calls - instead provide a meaningful response
 
     {tools_context}
 
@@ -1930,21 +1951,35 @@ class SAMAgent:
                     # Check if System 2 needs to intervene during tool execution
                     should_intervene, reasons = self.system2.should_intervene(system1_state)
 
-                    # ===== DEBUG: Show intervention check details =====
-                    if verbose:
-                        print(
-                            f"🧠 Checking intervention: consecutive={system1_state.consecutive_identical_tools}, threshold={self.system2.consecutive_tool_threshold}")
-
+                    # ===== ENHANCED INTERVENTION MESSAGING =====
                     if should_intervene:
                         intervention_result = self.system2.intervene(reasons, system1_state)
+
+                        # Clean intervention message for all modes
+                        if intervention_result.should_break_execution:
+                            executed_tools = len(tool_results)
+                            print(
+                                f"🧠 Metacognitive intervention: Tool loop detected after {system1_state.consecutive_identical_tools} consecutive '{tool_name}' calls")
+                            print(
+                                f"🛑 Execution halted to prevent inefficiency ({executed_tools} tools completed successfully)")
 
                         if verbose:
                             print(f"🧠 Mid-execution intervention: {intervention_result.message}")
 
                         if intervention_result.should_break_execution:
-                            print("🛑 System 2 requesting execution halt during tool execution")
                             self.system2_halt_requested = True
                             self.system2_halt_reason = intervention_result.message
+
+                            # ===== NEW: INFORM SYSTEM 1 VIA TOOL RESULTS =====
+                            executed_count = len(tool_results)
+                            intervention_message = (
+                                f"🧠 **METACOGNITIVE INTERVENTION**: System 2 has detected a tool execution loop "
+                                f"('{tool_name}' tool used {system1_state.consecutive_identical_tools} times consecutively) "
+                                f"and has halted further tool execution to prevent inefficiency. "
+                                f"Successfully completed {executed_count} tool executions. "
+                                f"Please provide a summary of what was accomplished instead of continuing with remaining tool calls."
+                            )
+                            tool_results.append(intervention_message)
                             break
 
                         # Update metrics after intervention
@@ -2009,8 +2044,19 @@ class SAMAgent:
 
                 # Feed tool results back to LLM as a "user" message (simulating human providing results)
                 if tool_results:
-                    tool_results_message = "Here are the results from the tool execution:\n\n" + "\n\n".join(
-                        tool_results)
+                    executed_count = len([r for r in tool_results if "executed successfully" in r])
+
+                    if self.system2_halt_requested:
+                        tool_results_message = (
+                                f"🧠 **EXECUTION SUMMARY**: {executed_count} tools completed successfully before "
+                                f"metacognitive intervention. System 2 detected repetitive behavior and halted execution "
+                                f"to prevent inefficiency. Please acknowledge this intervention and summarize what was "
+                                f"accomplished rather than attempting additional tool calls.\n\n"
+                                + "\n\n".join(tool_results)
+                        )
+                    else:
+                        tool_results_message = "Here are the results from the tool execution:\n\n" + "\n\n".join(
+                            tool_results)
 
                     self.conversation_history.append({
                         "role": "user",
@@ -2019,8 +2065,26 @@ class SAMAgent:
 
                     # Continue the loop so LLM can respond to the tool results naturally
                     continue
+
+                elif self.system2_halt_requested:
+                    # ===== FIX: Handle System 2 halt even when no tools executed =====
+                    intervention_message = (
+                        f"🧠 **METACOGNITIVE INTERVENTION**: System 2 has detected repetitive behavior "
+                        f"and halted tool execution to prevent inefficiency. No additional tools were executed. "
+                        f"Please acknowledge this intervention and provide a summary of what was accomplished "
+                        f"rather than attempting additional tool calls. Reason: {self.system2_halt_reason}"
+                    )
+
+                    self.conversation_history.append({
+                        "role": "user",
+                        "content": intervention_message
+                    })
+
+                    # Continue so System 1 can respond to the intervention
+                    continue
+
                 else:
-                    # No tools executed, we're done
+                    # No tools executed and no intervention, we're done
                     break
 
             return last_response
@@ -2068,6 +2132,10 @@ class SAMAgent:
     System 1 tools: {len(self.local_tools)} local, {len(self.mcp_tools)} MCP
     System 2 tools: {len(self.system2_tools)} (metacognitive - not accessible)
     </available_tools>"""
+
+        # Add System 2 status information
+        if self.system2_halt_requested:
+            tools_context += f"\n\n⚠️ IMPORTANT: System 2 has halted tool execution due to: {self.system2_halt_reason}"
 
         return tools_context
 
