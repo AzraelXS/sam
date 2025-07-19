@@ -89,7 +89,7 @@ class System2Agent:
 
         # Thresholds for intervention
         self.token_threshold = 0.75  # 75% of context limit
-        self.consecutive_tool_threshold = 5  # Same tool 5+ times
+        self.consecutive_tool_threshold = 6  # Same tool 5+ times
         self.stagnation_threshold = 8  # 8+ tools without progress
         self.error_rate_threshold = 0.4  # 40% tool failure rate
 
@@ -543,6 +543,10 @@ class SAMAgent:
         self.system2_tools = {}
         self.system2_tool_info = {}
         self.system2_tools_by_category = {category: [] for category in ToolCategory}
+
+        # ===== NEW: SYSTEM 2 HALT SIGNAL =====
+        self.system2_halt_requested = False
+        self.system2_halt_reason = ""
 
         # MCP (Model Context Protocol) support
         self.mcp_sessions = {}
@@ -1739,6 +1743,10 @@ class SAMAgent:
             self.stop_requested = False
             self.stop_message = ""
 
+            # ===== NEW: RESET SYSTEM 2 HALT FLAG =====
+            self.system2_halt_requested = False
+            self.system2_halt_reason = ""
+
             # ===== RESET SYSTEM 2 METRICS FOR NEW REQUEST =====
             self.execution_metrics = {
                 "consecutive_tool_count": 0,
@@ -1796,10 +1804,19 @@ class SAMAgent:
 
                     if intervention_result.should_break_execution:
                         print("🛑 System 2 requesting execution halt to break loop")
+                        # ===== NEW: SET PERSISTENT HALT FLAG =====
+                        self.system2_halt_requested = True
+                        self.system2_halt_reason = intervention_result.message
                         break
 
                     # Update metrics after intervention
                     self.system2.update_metrics(system1_state)
+
+                # ===== NEW: CHECK SYSTEM 2 HALT BEFORE CONTINUING =====
+                if self.system2_halt_requested:
+                    if verbose:
+                        print(f"🛑 System 2 halt: {self.system2_halt_reason}")
+                    break
 
                 # Build available tools context
                 tools_context = self._build_tools_context()
@@ -1844,6 +1861,12 @@ class SAMAgent:
                 if self.stop_requested:
                     break
 
+                # ===== NEW: CHECK SYSTEM 2 HALT AFTER LLM RESPONSE =====
+                if self.system2_halt_requested:
+                    if verbose:
+                        print(f"🛑 System 2 halt after LLM response: {self.system2_halt_reason}")
+                    break
+
                 # Extract and execute tool calls
                 tool_calls = self._extract_tool_calls(response)
 
@@ -1864,7 +1887,14 @@ class SAMAgent:
                 # ===== ENHANCED TOOL EXECUTION WITH SYSTEM 2 TRACKING =====
                 tool_results = []
                 for tool_call in tool_calls:
+                    # ===== EXISTING HALT CHECK =====
                     if self.stop_requested:
+                        break
+
+                    # ===== NEW: SYSTEM 2 HALT CHECK =====
+                    if self.system2_halt_requested:
+                        if verbose:
+                            print(f"🛑 System 2 halt during tool execution: {self.system2_halt_reason}")
                         break
 
                     tool_name = tool_call.get("name", "")
@@ -1877,12 +1907,61 @@ class SAMAgent:
                         self.execution_metrics["consecutive_tool_count"] = 1
                         self.execution_metrics["last_tool_name"] = tool_name
 
+                    # ===== DEBUG: Show consecutive count =====
+                    if verbose:
+                        print(
+                            f"🔧 Executing: {tool_name} (consecutive: {self.execution_metrics['consecutive_tool_count']})")
+
+                    # ===== NEW: MID-EXECUTION SYSTEM 2 INTERVENTION CHECK =====
+                    current_tokens = sum(self._estimate_token_count(msg.get('content', ''))
+                                         for msg in self.conversation_history)
+                    token_usage_percent = current_tokens / self.context_limit
+
+                    system1_state = System1State(
+                        token_usage_percent=token_usage_percent,
+                        consecutive_identical_tools=self.execution_metrics["consecutive_tool_count"],
+                        tools_without_progress=self.execution_metrics["tools_since_progress"],
+                        recent_error_rate=self._calculate_recent_error_rate(),
+                        total_tool_calls=self.execution_metrics["total_tool_count"],
+                        iteration_count=iteration,
+                        last_tool_calls=list(self.execution_metrics.get("recent_tools", []))
+                    )
+
+                    # Check if System 2 needs to intervene during tool execution
+                    should_intervene, reasons = self.system2.should_intervene(system1_state)
+
+                    # ===== DEBUG: Show intervention check details =====
+                    if verbose:
+                        print(
+                            f"🧠 Checking intervention: consecutive={system1_state.consecutive_identical_tools}, threshold={self.system2.consecutive_tool_threshold}")
+
+                    if should_intervene:
+                        intervention_result = self.system2.intervene(reasons, system1_state)
+
+                        if verbose:
+                            print(f"🧠 Mid-execution intervention: {intervention_result.message}")
+
+                        if intervention_result.should_break_execution:
+                            print("🛑 System 2 requesting execution halt during tool execution")
+                            self.system2_halt_requested = True
+                            self.system2_halt_reason = intervention_result.message
+                            break
+
+                        # Update metrics after intervention
+                        self.system2.update_metrics(system1_state)
+
                     # ===== SYSTEM 2 TRACKING: Track recent tools for pattern analysis =====
                     recent_tools = self.execution_metrics.get("recent_tools", [])
                     recent_tools.append(tool_name)
                     if len(recent_tools) > 10:  # Keep last 10 tools
                         recent_tools = recent_tools[-10:]
                     self.execution_metrics["recent_tools"] = recent_tools
+
+                    # ===== NEW: ADDITIONAL HALT CHECK BEFORE TOOL EXECUTION =====
+                    if self.system2_halt_requested:
+                        if verbose:
+                            print(f"🛑 System 2 halt before tool '{tool_name}': {self.system2_halt_reason}")
+                        break
 
                     if verbose:
                         print(f"\n🔧 Executing: {tool_name}")
@@ -1908,6 +1987,12 @@ class SAMAgent:
                             tool_results.append("⚠️ Maximum tool call limit reached for this request")
                             break
 
+                        # ===== NEW: HALT CHECK AFTER TOOL EXECUTION =====
+                        if self.system2_halt_requested:
+                            if verbose:
+                                print(f"🛑 System 2 halt after tool '{tool_name}': {self.system2_halt_reason}")
+                            break
+
                     except Exception as e:
                         # ===== SYSTEM 2 TRACKING: Error metrics =====
                         error_msg = f"Tool '{tool_name}' failed: {str(e)}"
@@ -1915,6 +2000,12 @@ class SAMAgent:
                         self.execution_metrics["tool_error_count"] += 1
                         self.execution_metrics["tools_since_progress"] += 1
                         logger.error(error_msg)
+
+                # ===== NEW: CHECK SYSTEM 2 HALT AFTER TOOL EXECUTION LOOP =====
+                if self.system2_halt_requested:
+                    if verbose:
+                        print(f"🛑 System 2 halt after all tool executions: {self.system2_halt_reason}")
+                    break
 
                 # Feed tool results back to LLM as a "user" message (simulating human providing results)
                 if tool_results:
