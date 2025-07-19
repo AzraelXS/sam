@@ -1,4 +1,4 @@
-# !/usr/bin/env python3
+#!/usr/bin/env python3
 """
 SAM - Secret Agent Man - AI agent
 Enhanced with full Model Context Protocol (MCP) support
@@ -30,7 +30,6 @@ logger = logging.getLogger("SAMAgent")
 # Optional imports with availability flags
 try:
     import requests
-
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
@@ -41,7 +40,6 @@ try:
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
     import uvicorn
-
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
@@ -235,7 +233,7 @@ class SAMAgent:
                  auto_approve: bool = False, connect_mcp_on_startup: bool = True):
         """Initialize SAM Agent"""
 
-        # Load configuration
+        # Load configuration FIRST and ensure raw_config is set
         self.config = self._load_config()
 
         # MCP auto-connection flag - will trigger on first run() call OR during startup if enabled
@@ -243,21 +241,21 @@ class SAMAgent:
 
         logger.info(f"SAM Agent initialized - MCP auto-connect: {self.config.mcp.enabled}")
 
-        # Store raw config for provider operations
-        if not hasattr(self, 'raw_config'):
-            self.raw_config = {}
-
         # Configure logging based on config
         self._configure_logging()
 
+        # MOVE ALL PROVIDER CONFIGURATION LOGIC HERE (after _load_config completes)
         # Model configuration - use provider-aware logic
         provider = self.raw_config.get('provider', 'lmstudio')
+
         if provider == 'claude':
             provider_config = self.raw_config.get('providers', {}).get('claude', {})
+
             self.base_url = "https://api.anthropic.com/v1"
             self.api_key = provider_config.get('api_key', '')
             self.model_name = model_name or provider_config.get('model_name', 'claude-sonnet-4-20250514')
             self.context_limit = context_limit or provider_config.get('context_limit', 200000)
+
         else:
             # For LMStudio, prefer the provider-specific config, then fall back to model section
             lmstudio_config = self.raw_config.get('providers', {}).get('lmstudio', {})
@@ -1291,7 +1289,6 @@ class SAMAgent:
             print(f"\n🔧 RAW TOOL CALL:")
             print(f"Tool: {tool_name}")
             print(f"Arguments: {json.dumps(args, indent=2)}")
-            #print()  # Add blank line here
 
             # Check if approval is required
             requires_approval = (
@@ -1446,19 +1443,19 @@ class SAMAgent:
                         "role": "system",
                         "content": f"""You are SAM (Secret Agent Man), an AI assistant with access to tools for various tasks.
 
-    CRITICAL TOOL USAGE INSTRUCTIONS:
-    - When you need to use a tool, respond with a JSON object in this EXACT format:
-    {{"name": "tool_name", "arguments": {{"param1": "value1", "param2": "value2"}}}}
-    - Put the JSON in a code block with ```json
-    - Use tools whenever they would be helpful for the user's request
-    - Always provide the tool call first, then explain what you're doing
-    - For multiple tools, use separate JSON objects in separate code blocks
-    - When you receive tool results from the user, respond naturally about what you found
+CRITICAL TOOL USAGE INSTRUCTIONS:
+- When you need to use a tool, respond with a JSON object in this EXACT format:
+{{"name": "tool_name", "arguments": {{"param1": "value1", "param2": "value2"}}}}
+- Put the JSON in a code block with ```json
+- Use tools whenever they would be helpful for the user's request
+- Always provide the tool call first, then explain what you're doing
+- For multiple tools, use separate JSON objects in separate code blocks
+- When you receive tool results from the user, respond naturally about what you found
 
-    {tools_context}
+{tools_context}
 
-    Current safety settings: {self.get_safety_status()}
-    {self.stop_message}"""
+Current safety settings: {self.get_safety_status()}
+{self.stop_message}"""
                     }
                 ]
 
@@ -1546,7 +1543,6 @@ class SAMAgent:
             logger.error(f"Error in run: {str(e)}")
             return f"❌ Error: {str(e)}"
 
-
     def _build_tools_context(self) -> str:
         """Build the available tools context for the LLM"""
         if not self.local_tools and not self.mcp_tools:
@@ -1568,22 +1564,20 @@ class SAMAgent:
             tools_list.append(f"- {tool_name}: {description} (MCP Server: {server_name})")
 
         tools_context = f"""
-    
-    <available_tools>
-    Available tools ({len(tools_list)} total):
-    {chr(10).join(tools_list)}
-    
-    Local tools: {len(self.local_tools)}
-    MCP tools: {len(self.mcp_tools)} from {len(self.mcp_sessions)} servers
-    </available_tools>"""
+
+<available_tools>
+Available tools ({len(tools_list)} total):
+{chr(10).join(tools_list)}
+
+Local tools: {len(self.local_tools)}
+MCP tools: {len(self.mcp_tools)} from {len(self.mcp_sessions)} servers
+</available_tools>"""
 
         return tools_context
-
 
     def _estimate_token_count(self, text: str) -> int:
         """Rough token count estimation"""
         return len(text) // 4
-
 
     def _get_context_status(self) -> str:
         """Get current context usage status"""
@@ -1613,7 +1607,6 @@ class SAMAgent:
             f"Tools: {len(self.local_tools)} local, {len(self.mcp_tools)} MCP. "
             f"{warning}"
         )
-
 
     def list_tools(self) -> Dict[str, Any]:
         """List all available tools"""
@@ -1757,7 +1750,6 @@ def main():
                     result = safety_commands[user_input.lower()]()
                     print(result)
                     continue  # This is crucial - it prevents the "SAM is thinking" code from running
-
 
             elif user_input.lower().startswith('provider '):
                 provider_name = user_input.split(' ', 1)[1].strip()
