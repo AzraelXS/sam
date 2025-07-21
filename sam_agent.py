@@ -172,8 +172,11 @@ class System2Agent:
         )
 
     def _handle_token_limit_breach(self) -> bool:
-        """Handle context token limit breach"""
-        logger.info("🧠 System 2: Compressing context due to token limit")
+        """Handle context token limit breach with user notification"""
+        original_tokens = sum(self.system1._estimate_token_count(msg.get('content', ''))
+                              for msg in self.system1.conversation_history)
+
+        print(f"🧠 SYSTEM 2: Context limit reached ({original_tokens:,} tokens) - compressing conversation...")
 
         # Intelligent context compression
         original_length = len(self.system1.conversation_history)
@@ -195,9 +198,15 @@ class System2Agent:
                 # Rebuild conversation with compression
                 self.system1.conversation_history = [system_msg, summary_msg] + recent_msgs
 
+                new_tokens = sum(self.system1._estimate_token_count(msg.get('content', ''))
+                                 for msg in self.system1.conversation_history)
+
+                print(
+                    f"✅ Context compressed: {original_tokens:,} → {new_tokens:,} tokens ({original_length} → {len(self.system1.conversation_history)} messages)")
                 logger.info(f"🧠 Compressed {original_length} messages to {len(self.system1.conversation_history)}")
                 return True
 
+        print("⚠️ Context compression not possible - conversation too short")
         return False
 
     def _handle_tool_loop(self, state: System1State) -> bool:
@@ -214,7 +223,11 @@ class System2Agent:
         return True
 
     def _handle_stagnation(self, state: System1State) -> bool:
-        """Handle progress stagnation"""
+        """Handle progress stagnation with user notification"""
+        print(
+            f"🧠 SYSTEM 2: Progress stagnation detected - {state.tools_without_progress} tools executed without clear progress")
+        print(f"💡 Suggesting approach change")
+
         logger.info(f"🧠 System 2: Addressing stagnation ({state.tools_without_progress} tools without progress)")
 
         guidance_msg = {
@@ -226,7 +239,9 @@ class System2Agent:
         return True
 
     def _handle_high_errors(self, state: System1State) -> bool:
-        """Handle high error rate"""
+        """Handle high error rate with user notification"""
+        print(f"🧠 SYSTEM 2: High error rate detected ({state.recent_error_rate:.1%}) - suggesting simpler approach")
+
         logger.info(f"🧠 System 2: Mitigating high error rate ({state.recent_error_rate:.1%})")
 
         error_msg = {
@@ -1777,6 +1792,9 @@ class SAMAgent:
                 if verbose:
                     print(f"\n🔄 Iteration {iteration + 1}/{max_iterations}")
 
+                # ===== PROACTIVE CONTEXT MONITORING =====
+                self._check_context_and_warn_user()
+
                 # ===== SYSTEM 2 INTERVENTION POINT =====
                 # Calculate current System 1 state
                 current_tokens = sum(self._estimate_token_count(msg.get('content', ''))
@@ -1797,7 +1815,14 @@ class SAMAgent:
                 should_intervene, reasons = self.system2.should_intervene(system1_state)
 
                 if should_intervene:
+                    # NOTIFY USER BEFORE INTERVENTION
+                    print(f"\n🧠 SYSTEM 2 INTERVENTION TRIGGERED")
+                    print(f"Reason: {reasons}")
+
                     intervention_result = self.system2.intervene(reasons, system1_state)
+
+                    # SHOW USER WHAT HAPPENED
+                    print(f"Action taken: {intervention_result.action_taken}")
 
                     if verbose:
                         print(f"🧠 {intervention_result.message}")
@@ -1867,6 +1892,7 @@ class SAMAgent:
                 # Add conversation history
                 messages.extend(self.conversation_history)
 
+                # Always show context status in verbose mode, warnings always show regardless
                 if verbose:
                     print(f"📊 {self._get_context_status()}")
 
@@ -1953,7 +1979,14 @@ class SAMAgent:
 
                     # ===== ENHANCED INTERVENTION MESSAGING =====
                     if should_intervene:
+                        # NOTIFY USER BEFORE INTERVENTION
+                        print(f"\n🧠 SYSTEM 2 MID-EXECUTION INTERVENTION")
+                        print(f"Reason: {reasons}")
+
                         intervention_result = self.system2.intervene(reasons, system1_state)
+
+                        # SHOW USER WHAT HAPPENED
+                        print(f"Action taken: {intervention_result.action_taken}")
 
                         # Clean intervention message for all modes
                         if intervention_result.should_break_execution:
@@ -2140,8 +2173,21 @@ class SAMAgent:
         return tools_context
 
     def _estimate_token_count(self, text: str) -> int:
-        """Rough token count estimation"""
-        return len(text) // 4
+        """More accurate token count estimation for Claude/LLM"""
+        if not text:
+            return 0
+
+        # Claude typically uses ~3.5-4 characters per token for English text
+        # Use conservative estimate to avoid hitting limits
+        char_count = len(text)
+
+        # Account for JSON structure, code blocks, special formatting
+        if '```' in text or '{' in text or '"name":' in text:
+            # Code/JSON tends to be more token-dense
+            return int(char_count / 3.0)
+        else:
+            # Regular text
+            return int(char_count / 3.5)
 
     def _get_context_status(self) -> str:
         """Get current context usage status"""
@@ -2161,9 +2207,11 @@ class SAMAgent:
 
         warning = ""
         if percent_used > 90:
-            warning = "⚠️ CRITICAL: Context nearly full!"
+            warning = "🚨 CRITICAL: Context nearly full!"
         elif percent_used > 75:
             warning = "⚠️ WARNING: Context usage high"
+        elif percent_used > 50:
+            warning = "📊 INFO: Context at 50%"
 
         return (
             f"CONTEXT STATUS: ~{total_tokens:,} tokens used (~{percent_used:.1f}% of {self.context_limit:,}). "
@@ -2171,6 +2219,23 @@ class SAMAgent:
             f"Tools: {len(self.local_tools)} local, {len(self.mcp_tools)} MCP. "
             f"{warning}"
         )
+
+    def _check_context_and_warn_user(self) -> None:
+        """Proactively check context usage and warn user"""
+        current_tokens = sum(self._estimate_token_count(msg.get('content', ''))
+                             for msg in self.conversation_history)
+        usage_percent = current_tokens / self.context_limit
+
+        # Show warnings at key thresholds
+        if usage_percent > 0.85:
+            print(
+                f"🚨 CRITICAL: Context at {usage_percent:.1%} ({current_tokens:,}/{self.context_limit:,} tokens) - System 2 will compress soon")
+        elif usage_percent > 0.70:
+            print(
+                f"⚠️ WARNING: Context at {usage_percent:.1%} ({current_tokens:,}/{self.context_limit:,} tokens) - approaching intervention threshold")
+        elif usage_percent > 0.50:
+            print(f"📊 INFO: Context at {usage_percent:.1%} ({current_tokens:,}/{self.context_limit:,} tokens)")
+
 
     def list_tools(self) -> Dict[str, Any]:
         """List all available tools"""
