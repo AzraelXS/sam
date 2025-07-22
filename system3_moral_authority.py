@@ -429,11 +429,11 @@ Be thorough but decisive. You are the final safeguard protecting against harmful
         return report
 
 
-def integrate_system3_with_sam(sam_agent):
+def integrate_system3_with_sam(sam_agent, use_claude: bool = False):  # Add parameter with default
     """Integrate System 3 moral authority with SAM agent"""
 
-    # Create System 3 - CHANGED: Default to local LLM, not Claude
-    sam_agent.system3 = System3MoralAuthority(sam_agent, use_claude=False)
+    # Create System 3 with the specified provider preference
+    sam_agent.system3 = System3MoralAuthority(sam_agent, use_claude=use_claude)
 
     # Override the tool execution method to include moral evaluation
     original_execute_tool = sam_agent._execute_tool

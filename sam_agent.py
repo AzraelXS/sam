@@ -597,7 +597,7 @@ class SAMAgent:
         if connect_mcp_on_startup:
             self._connect_mcp_on_startup()
 
-    def enable_conscience(self, use_claude: bool = True, test_mode: bool = False) -> str:
+    def enable_conscience(self, use_claude: bool = False, test_mode: bool = False) -> str:  # Change default to False
         """
         Enable System 3 moral authority (conscience) for this agent
 
@@ -614,8 +614,8 @@ class SAMAgent:
         try:
             print("🛡️ Initializing System 3 - Moral Authority...")
 
-            # Integrate System 3
-            self.system3 = integrate_system3_with_sam(self)
+            # Integrate System 3 - PASS THE ACTUAL use_claude PARAMETER
+            self.system3 = integrate_system3_with_sam(self, use_claude=use_claude)  # Add the parameter
 
             if test_mode:
                 print("🧪 Running System 3 test suite...")
@@ -2577,7 +2577,7 @@ def main():
                 conscience_command = user_input.lower().strip()
 
                 if conscience_command == 'conscience on':
-                    result = sam.enable_conscience(use_claude=True, test_mode=False)
+                    result = sam.enable_conscience(use_claude=False, test_mode=False)  # Default to local LLM
                     print(result)
                     continue
 
