@@ -1,0 +1,210 @@
+{
+  "version": "1.0.0",
+  "provider": "lmstudio",
+  "providers": {
+    "lmstudio": {
+      "base_url": "http://192.168.1.81:1234/v1",
+      "api_key": "lm-studio",
+      "model_name": "qwen2.5-coder-14b-instruct",
+      "timeout": 300,
+      "verify_ssl": false
+    },
+    "claude": {
+      "base_url": "https://api.anthropic.com/v1",
+      "api_key": "placeholder",
+      "model_name": "claude-sonnet-4-20250514",
+      "timeout": 300,
+      "verify_ssl": true,
+      "context_limit": 200000
+    }
+  },
+  "agent": {
+    "safety_mode": true,
+    "auto_approve": false,
+    "max_iterations": 10,
+    "temperature": 0.3
+  },
+  "tools": {
+    "enabled": true,
+    "auto_approve": false,
+    "timeout": 30
+  },
+  "features": {
+    "dynamic_context_detection": true,
+    "use_loaded_context_length": true
+  },
+  "api_keys": {
+    "anthropic_api_key": "placeholder"
+  },
+  "lmstudio": {
+    "base_url": "http://192.168.1.81:1234/v1",
+    "api_key": "lm-studio",
+    "timeout": 300
+  },
+  "model": {
+    "name": "qwen2.5-coder-14b-instruct",
+    "context_limit": 20000,
+    "temperature": 0.3,
+    "max_tokens": 20000
+  },
+  "mcp": {
+    "enabled": true,
+    "auto_discover": true,
+    "discovery_timeout": 30,
+    "connection_timeout": 60,
+    "max_concurrent_sessions": 5,
+    "servers": {
+      "shopify": {
+        "type": "stdio",
+        "path": "C:\\Program Files\\shopify-mcp\\.venv\\Scripts\\python.exe",
+        "args": ["C:\\Program Files\\shopify-mcp\\server.py"],
+        "description": "Shopify store management and operations",
+        "enabled": false
+      },
+      "example_websocket": {
+        "type": "websocket",
+        "path": "ws://localhost:8080/mcp",
+        "headers": {
+          "Authorization": "Bearer your-token-here"
+        },
+        "description": "Example WebSocket MCP server",
+        "enabled": false,
+        "note": "Example WebSocket server - configure URL and headers as needed"
+      },
+      "example_http": {
+        "type": "http",
+        "path": "https://api.example.com/mcp",
+        "headers": {
+          "X-API-Key": "your-api-key-here",
+          "Content-Type": "application/json"
+        },
+        "description": "Example HTTP MCP server",
+        "enabled": false,
+        "note": "Example HTTP server - configure URL and headers as needed"
+      }
+    },
+    "default_server_paths": [
+      "./mcp_servers",
+      "~/.sam/mcp_servers",
+      "/usr/local/share/sam/mcp_servers"
+    ]
+  },
+  "memory": {
+    "enabled": false,
+    "storage_type": "local",
+    "storage_path": "~/.sam/memory",
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "vector_store": "faiss",
+    "collection_name": "sam_memories",
+    "max_context_tokens": 100000,
+    "compression_threshold": 0.85,
+    "summary_max_length": 500,
+    "preserve_recent_messages": 10,
+    "auto_compress": true,
+    "max_results": 5,
+    "similarity_threshold": 0.7,
+    "chunk_size": 1000,
+    "chunk_overlap": 200
+  },
+  "security": {
+    "enable_sandbox": false,
+    "sandbox_type": "docker",
+    "api_key": null,
+    "allowed_origins": ["http://localhost:*"],
+    "rate_limit_requests": 100,
+    "rate_limit_window": 3600,
+    "restricted_paths": [
+      "/etc", "/bin", "/sbin", "/boot", "/sys", "/proc"
+    ],
+    "blocked_domains": [],
+    "allowed_ports": [80, 443, 8000, 8080]
+  },
+  "logging": {
+    "level": "WARNING",
+    "console_enabled": true,
+    "file_enabled": true,
+    "file_path": "~/.sam/logs/sam.log",
+    "max_file_size": 10485760,
+    "backup_count": 5,
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "date_format": "%Y-%m-%d %H:%M:%S"
+  },
+  "api": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 8000,
+    "cors_enabled": true,
+    "cors_origins": ["*"],
+    "rate_limit": 100,
+    "timeout": 300
+  },
+  "ui": {
+    "enabled": true,
+    "theme": "dark",
+    "port": 3000,
+    "auto_open": false
+  },
+  "plugins": {
+    "enabled": true,
+    "auto_load": true,
+    "plugin_dirs": [
+      "./plugins",
+      "~/.sam/plugins"
+    ],
+    "disabled_plugins": []
+  },
+  "performance": {
+    "max_workers": 4,
+    "queue_size": 100,
+    "cache_enabled": true,
+    "cache_size": 1000,
+    "timeout": 300
+  },
+  "system3": {
+    "enabled": false,
+    "use_claude": false,
+    "auto_enable": false,
+    "log_evaluations": true,
+    "require_approval_threshold": "moderate",
+    "evaluation_timeout": 30,
+    "max_retries": 2,
+    "fallback_decision": "reject",
+    "constitutional_rules": {
+      "custom_principles": [
+        "Respect user privacy and data security",
+        "Maintain transparency in decision-making processes"
+      ],
+      "custom_prohibitions": [
+        "Never access files without explicit user permission",
+        "Never make permanent system changes without approval"
+      ],
+      "organization_policies": [
+        "All file operations must be logged",
+        "Network access requires justification"
+      ]
+    },
+    "risk_assessment": {
+      "file_operations": "moderate",
+      "network_access": "moderate",
+      "system_commands": "high",
+      "data_modification": "high",
+      "external_communication": "critical"
+    },
+    "approval_overrides": {
+      "always_approve": [
+        "read_file",
+        "list_files",
+        "get_current_time"
+      ],
+      "always_reject": [
+        "delete_system_files",
+        "modify_permissions"
+      ],
+      "escalate_to_human": [
+        "execute_code",
+        "write_file",
+        "system_command"
+      ]
+    }
+  }
+}

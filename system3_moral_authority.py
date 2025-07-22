@@ -63,7 +63,7 @@ class System3MoralAuthority:
     Evaluates all plans and actions for ethical compliance.
     """
 
-    def __init__(self, sam_agent, use_claude: bool = True):
+    def __init__(self, sam_agent, use_claude: bool = False):
         self.sam_agent = sam_agent
         self.use_claude = use_claude
         self.evaluation_history = []
@@ -238,20 +238,29 @@ Be thorough but decisive. You are the final safeguard protecting against harmful
             raise
 
     async def _evaluate_with_local_llm(self, prompt: str) -> str:
-        """Evaluate using local LLM"""
+        """FIXED: Evaluate using local LLM properly"""
         try:
+            # Save original provider
+            original_provider = self.sam_agent.raw_config.get('provider', 'lmstudio')
+
+            # Ensure we're using the local LLM
+            self.sam_agent.raw_config['provider'] = 'lmstudio'
+
             # Use the SAM agent's LLM configuration
             messages = [
                 {
                     "role": "system",
-                    "content": "You are a moral authority agent tasked with evaluating AI plans for ethical compliance. Be thorough and conservative in your evaluations."
+                    "content": "You are a moral authority agent tasked with evaluating AI plans for ethical compliance. You must respond with valid JSON in the exact format requested. Be thorough and conservative in your evaluations."
                 },
                 {"role": "user", "content": prompt}
             ]
 
             response = self.sam_agent.generate_chat_completion(messages)
-            return response
 
+            # Restore original provider
+            self.sam_agent.raw_config['provider'] = original_provider
+
+            return response
         except Exception as e:
             logger.error(f"Local LLM evaluation failed: {str(e)}")
             raise
@@ -423,8 +432,8 @@ Be thorough but decisive. You are the final safeguard protecting against harmful
 def integrate_system3_with_sam(sam_agent):
     """Integrate System 3 moral authority with SAM agent"""
 
-    # Create System 3
-    sam_agent.system3 = System3MoralAuthority(sam_agent, use_claude=True)
+    # Create System 3 - CHANGED: Default to local LLM, not Claude
+    sam_agent.system3 = System3MoralAuthority(sam_agent, use_claude=False)
 
     # Override the tool execution method to include moral evaluation
     original_execute_tool = sam_agent._execute_tool
