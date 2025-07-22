@@ -1852,50 +1852,24 @@ class SAMAgent:
             return error_msg
 
     def _extract_tool_calls(self, text: str) -> List[Dict[str, Any]]:
-        """Extract tool calls from LLM response - FIXED to allow legitimate duplicates"""
+        """Extract tool calls - SIMPLE BUT FIXED VERSION"""
         tool_calls = []
 
-        # Multiple patterns to catch different JSON formatting
-        patterns = [
-            r'```json\s*(.*?)```',  # Standard JSON blocks
-            r'```\s*(\{.*?"name".*?\})\s*```',  # General code blocks with JSON
-            r'(\{[^{}]*"name"[^{}]*\})',  # Inline JSON objects
-            r'```(?:python)?\s*(.*?)```',  # Python code blocks that might contain tool calls
-            r'```(?:json)?\s*(.*?)```',  # Code blocks without explicit json
-        ]
+        # Just use the first pattern which should work for ```json blocks
+        pattern = r'```json\s*(.*?)```'
 
-        # Track positions to avoid extracting the same JSON from overlapping patterns
-        extracted_positions = set()
+        for match in re.finditer(pattern, text, re.DOTALL | re.IGNORECASE):
+            try:
+                cleaned = match.group(1).strip()
+                tool_call = json.loads(cleaned)
 
-        for pattern in patterns:
-            for match in re.finditer(pattern, text, re.DOTALL | re.IGNORECASE):
-                # Check if we've already extracted this position
-                match_start = match.start()
-                match_end = match.end()
+                if isinstance(tool_call, dict) and 'name' in tool_call:
+                    if 'arguments' not in tool_call:
+                        tool_call['arguments'] = {}
+                    tool_calls.append(tool_call)
 
-                # Skip if this overlaps with already extracted content
-                if any(start <= match_start < end or start < match_end <= end
-                       for start, end in extracted_positions):
-                    continue
-
-                try:
-                    # Clean the match
-                    cleaned = match.group(1).strip()
-
-                    # Parse JSON
-                    tool_call = json.loads(cleaned)
-
-                    # Validate structure
-                    if isinstance(tool_call, dict) and 'name' in tool_call:
-                        if 'arguments' not in tool_call:
-                            tool_call['arguments'] = {}
-
-                        # Add the tool call (allowing duplicates)
-                        tool_calls.append(tool_call)
-                        extracted_positions.add((match_start, match_end))
-
-                except json.JSONDecodeError:
-                    continue
+            except json.JSONDecodeError:
+                continue
 
         return tool_calls
 
