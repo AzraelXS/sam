@@ -1,269 +1,397 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Michael Gay - Resume</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            line-height: 1.6;
-            color: #333;
-        }
-        .header {
-            text-align: center;
-            border-bottom: 2px solid #333;
-            padding-bottom: 20px;
-            margin-bottom: 30px;
-        }
-        .header h1 {
-            font-size: 2.5em;
-            margin: 0;
-            color: #333;
-        }
-        .header p {
-            font-size: 1.2em;
-            color: #666;
-            margin: 10px 0;
-        }
-        .contact {
-            font-size: 1em;
-            color: #555;
-        }
-        .section {
-            margin-bottom: 30px;
-        }
-        .section h2 {
-            font-size: 1.4em;
-            color: #333;
-            border-bottom: 1px solid #ccc;
-            padding-bottom: 5px;
-            margin-bottom: 15px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .job {
-            margin-bottom: 25px;
-        }
-        .job h3 {
-            color: #333;
-            margin-bottom: 5px;
-        }
-        .job .company {
-            font-style: italic;
-            color: #666;
-            margin-bottom: 10px;
-        }
-        .achievement {
-            background-color: #e8f4fd;
-            border-left: 4px solid #4a90e2;
-            padding: 10px 15px;
-            margin: 15px 0;
-        }
-        ul {
-            padding-left: 20px;
-        }
-        li {
-            margin-bottom: 8px;
-        }
-        .highlight {
-            background-color: #e8f4fd;
-            border-left: 4px solid #4a90e2;
-            padding: 10px 15px;
-            margin: 10px 0;
-        }
-    </style>
+   <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <title>Michael Gay - Resume</title>
+   <style>
+       @media print {
+           body { margin: 0; }
+           .page-break { page-break-before: always; }
+       }
+
+       body {
+           font-family: 'Georgia', 'Times New Roman', serif;
+           max-width: 8.5in;
+           margin: 0 auto;
+           padding: 0.75in;
+           line-height: 1.4;
+           color: #000;
+           background: white;
+           font-size: 11pt;
+       }
+
+       .header {
+           text-align: center;
+           border-bottom: 2pt solid #000;
+           padding-bottom: 15pt;
+           margin-bottom: 20pt;
+       }
+
+       .header h1 {
+           font-size: 20pt;
+           margin: 0;
+           font-weight: bold;
+           color: #000;
+       }
+
+       .header .title {
+           font-size: 12pt;
+           color: #333;
+           margin: 5pt 0;
+           font-style: italic;
+       }
+
+       .contact {
+           font-size: 10pt;
+           color: #333;
+           margin-top: 8pt;
+       }
+
+       .section {
+           margin-bottom: 18pt;
+       }
+
+       .section h2 {
+           font-size: 12pt;
+           font-weight: bold;
+           color: #000;
+           border-bottom: 1pt solid #000;
+           padding-bottom: 2pt;
+           margin-bottom: 8pt;
+           text-transform: uppercase;
+           letter-spacing: 1pt;
+       }
+
+       .job {
+           margin-bottom: 15pt;
+       }
+
+       .job h3 {
+           font-size: 11pt;
+           font-weight: bold;
+           color: #000;
+           margin-bottom: 2pt;
+       }
+
+       .job .company {
+           font-style: italic;
+           color: #333;
+           margin-bottom: 5pt;
+           font-size: 10pt;
+       }
+
+       .job h4 {
+           font-size: 10pt;
+           font-weight: bold;
+           color: #000;
+           margin: 8pt 0 4pt 0;
+       }
+
+       .achievement {
+           border-left: 3pt solid #000;
+           padding-left: 8pt;
+           margin: 8pt 0;
+           font-style: italic;
+           background: #f5f5f5;
+           padding-top: 4pt;
+           padding-bottom: 4pt;
+       }
+
+       .breakthrough {
+           border: 1pt solid #000;
+           padding: 10pt;
+           margin: 12pt 0;
+           background: #f9f9f9;
+       }
+
+       .research-highlight {
+           border-left: 3pt solid #333;
+           padding-left: 8pt;
+           margin: 6pt 0;
+           font-weight: bold;
+           background: #f0f0f0;
+           padding-top: 4pt;
+           padding-bottom: 4pt;
+       }
+
+       ul {
+           padding-left: 18pt;
+           margin: 4pt 0;
+       }
+
+       li {
+           margin-bottom: 3pt;
+           font-size: 10pt;
+       }
+
+       .competency-section {
+           margin-bottom: 12pt;
+       }
+
+       .competency-section h3 {
+           font-size: 10pt;
+           font-weight: bold;
+           margin: 6pt 0 3pt 0;
+           text-decoration: underline;
+       }
+
+       .highlight {
+           border-left: 3pt solid #000;
+           padding-left: 8pt;
+           margin: 8pt 0;
+           font-weight: bold;
+           background: #f5f5f5;
+           padding-top: 4pt;
+           padding-bottom: 4pt;
+       }
+
+       .subsection {
+           margin-left: 15pt;
+           margin-top: 8pt;
+       }
+
+       p {
+           margin: 4pt 0;
+           text-align: justify;
+       }
+   </style>
 </head>
 <body>
-    <div class="header">
-        <h1>Michael Gay</h1>
-        <p>AI Systems Architect & Enterprise Automation Pioneer</p>
-        <div class="contact">
-            8110 Hatton Road, Frankfort, KY 40601 | (502) 682-5741 | azraelxs2012@gmail.com
-        </div>
-    </div>
+   <div class="header">
+       <h1>Michael Gay</h1>
+       <div class="title">AI Safety Pioneer & Enterprise Systems Architect</div>
+       <div class="contact">
+           8110 Hatton Road, Frankfort, KY 40601 | (502) 682-5741 | azraelxs2012@gmail.com
+       </div>
+   </div>
 
-    <div class="section">
-        <h2>Professional Summary</h2>
-        <p>Enterprise systems architect with 14 years of experience single-handedly architecting, developing, testing, securing, and maintaining mission-critical automation platforms across the entire software development lifecycle. Demonstrated exceptional ability to rapidly master emerging technologies and translate them into production systems. Recently transitioned from traditional enterprise automation to cutting-edge agentic AI development, building production AI agents that interface with enterprise systems. Recognized as Company Valedictorian (2022) for exceptional technical contributions. Known for systematic problem-solving approach and unique ability to identify optimization opportunities across complex technical domains.</p>
-    </div>
+   <div class="section">
+       <h2>Professional Summary</h2>
+       <p>Pioneering AI safety researcher and enterprise systems architect with 14 years of experience architecting mission-critical systems. <strong>First known implementer of functional tri-process consciousness architecture for AI systems</strong>, extending dual-process theory to simultaneously solve the interpretability, control, and alignment problems through novel application of constitutional AI principles. Recognized as Company Valedictorian (2022) for exceptional technical contributions. Proven ability to rapidly master emerging technologies and translate complex theoretical frameworks into production-ready systems with advanced Elasticsearch integration.</p>
+   </div>
 
-    <div class="section">
-        <h2>Core Competencies</h2>
+   <div class="section">
+       <h2>Revolutionary AI Safety Research</h2>
 
-        <h3>AI Agent Development & Implementation</h3>
-        <ul>
-            <li>Production deployment of autonomous AI agents in enterprise environments</li>
-            <li>Tool-calling frameworks and enterprise system integration</li>
-            <li>Multi-agent architectures with specialized sub-agents</li>
-            <li>Comprehensive safety frameworks with configurable approval workflows</li>
-        </ul>
+       <div class="breakthrough">
+           <h3>SAM (Secret Agent Man) - Tri-Process Consciousness Architecture (2024-Present)</h3>
+           <p><em>Novel AI safety framework extending dual-process theory to address three fundamental problems simultaneously</em></p>
 
-        <h3>Enterprise Systems Evolution</h3>
-        <ul>
-            <li>Independent architecture and migration of complex platforms across technology paradigms</li>
-            <li>Self-directed mastery of emerging technology stacks</li>
-            <li>Pattern recognition across heterogeneous system environments</li>
-            <li>Cost optimization through strategic technology adoption</li>
-        </ul>
+           <div class="research-highlight">
+               Breakthrough Achievement: First known implementation of functional tri-process cognitive architecture in AI systems, extending Kahneman's dual-process theory with constitutional oversight to create an unbypassable moral conscience that prevents alignment faking and maintains interpretability at scale.
+           </div>
 
-        <h3>Full-Stack Software Development Lifecycle</h3>
-        <ul>
-            <li>End-to-end ownership: architecture, development, testing, security, and deployment</li>
-            <li>Self-directed quality assurance and user acceptance testing</li>
-            <li>Independent change management and release coordination</li>
-            <li>Autonomous problem-solving across all technical domains</li>
-        </ul>
+           <h4>Core Innovations:</h4>
+           <ul>
+               <li><strong>Tri-Process Consciousness Implementation:</strong> Novel architecture extending Kahneman's dual-process theory (System 1/System 2) with System 3 constitutional oversight, featuring functional metacognitive monitoring that detects loops, manages context, and provides immutable moral authority</li>
+               <li><strong>Digital Freudian Architecture:</strong> Computational implementation of id/ego/superego structure where System 3 acts as an unbypassable moral authority that cannot be bypassed or modified by the primary agent</li>
+               <li><strong>Constitutional Enforcement Layer:</strong> Pre-action evaluation system requiring all tool executions to pass through explicit moral reasoning, preventing the "alignment faking" problem identified in current research</li>
+               <li><strong>Transparent Metacognition:</strong> All oversight processes are auditable and interpretable, solving the "black box" problem while maintaining high performance</li>
+               <li><strong>Elasticsearch-Native Architecture:</strong> Deep integration with Elasticsearch for logging, monitoring, and AI training data management - leveraging Elasticsearch's prominence in current AI infrastructure</li>
+           </ul>
 
-        <h3>Rapid Technical Adaptation</h3>
-        <ul>
-            <li>Demonstrated ability to master new domains within months</li>
-            <li>AI-assisted learning methodology for accelerated skill acquisition</li>
-            <li>Full-stack development transition using systematic approach</li>
-        </ul>
-    </div>
+           <h4>Addresses Core AI Safety Problems:</h4>
+           <ul>
+               <li><strong>Interpretability Problem:</strong> Explicit reasoning chains for all decisions through metacognitive monitoring and constitutional evaluation</li>
+               <li><strong>Control Problem:</strong> Immutable oversight architecture prevents self-modification of safety systems</li>
+               <li><strong>Alignment Problem:</strong> Pre-action moral evaluation ensures persistent alignment independent of capability scaling</li>
+               <li><strong>Scalable Oversight:</strong> AI-supervised AI through hierarchical consciousness layers with Elasticsearch-powered analytics</li>
+           </ul>
 
-    <div class="section">
-        <h2>Professional Experience</h2>
+           <div class="research-highlight">
+               Research Impact: This tri-process architecture advances beyond current Constitutional AI and RLHF approaches by implementing pre-action evaluation rather than post-training alignment, creating the first AI system with genuine metacognitive oversight AND constitutional enforcement capabilities.
+           </div>
+       </div>
+   </div>
 
-        <div class="job">
-            <h3>AI Systems Architect & DevOps Engineer</h3>
-            <div class="company">Volta Inc | 2014-Present</div>
-            <p><em>Independently evolved enterprise automation platform from traditional PowerShell-based systems to cutting-edge AI-powered autonomous operations</em></p>
+   <div class="section">
+       <h2>Core Competencies</h2>
 
-            <h4>AI Agent Development & Deployment (2024-Present)</h4>
-            <ul>
-                <li>Developed production agentic AI systems interfacing with enterprise infrastructure</li>
-                <li>Built autonomous agents capable of security incident investigation, system diagnostics, and operational task execution</li>
-                <li>Implemented comprehensive safety mechanisms including human-in-the-loop validation, per-session configurable auto-approval, tool categorization, and optional safety override capabilities</li>
-                <li>Achieved production deployment on consumer-grade hardware demonstrating exceptional efficiency optimization</li>
-                <li>Sole technical architect and developer responsible for complete software development lifecycle including design, coding, testing, security implementation, user acceptance, and change management</li>
-            </ul>
+       <div class="competency-section">
+           <h3>AI Safety & Alignment Research</h3>
+           <ul>
+               <li>Tri-process consciousness architecture design and implementation (extending dual-process theory)</li>
+               <li>Constitutional AI and moral authority system development</li>
+               <li>Metacognitive monitoring and loop detection algorithms</li>
+               <li>AI interpretability and transparent decision-making systems</li>
+               <li>Scalable oversight frameworks for autonomous agents</li>
+               <li>Elasticsearch-native AI system architecture and data pipeline design</li>
+           </ul>
+       </div>
 
-            <h4>Technology Stack Evolution (2023-2024)</h4>
-            <ul>
-                <li>Self-taught modern development stack (HTML, CSS, JavaScript, Python, Django, Elasticsearch) using AI-assisted learning methodology</li>
-                <li>Progressed from foundational machine learning concepts to production agentic systems within 12 months</li>
-                <li>Demonstrated systematic approach to mastering complex technical domains</li>
-            </ul>
+       <div class="competency-section">
+           <h3>Enterprise AI Implementation</h3>
+           <ul>
+               <li>Production AI agent deployment with comprehensive safety frameworks</li>
+               <li>Model Context Protocol (MCP) integration and enterprise system connectivity</li>
+               <li>Multi-provider LLM orchestration and optimization</li>
+               <li>AI-assisted automation with human-in-the-loop validation</li>
+               <li>Large-scale AI system architecture with Elasticsearch backend integration</li>
+               <li>Cloud-native AI deployment with AWS services integration</li>
+           </ul>
+       </div>
 
-            <h4>Enterprise Platform Architecture (2014-2023)</h4>
-            <div class="achievement">
-                Named Volta Company Valedictorian (2022) in recognition of exceptional automation platform development and technical innovation
-            </div>
+       <div class="competency-section">
+           <h3>Enterprise Systems & Security</h3>
+           <ul>
+               <li>Independent architecture and migration of complex platforms across technology paradigms</li>
+               <li>Cybersecurity incident response and threat hunting with Elasticsearch SIEM</li>
+               <li>Network Operations Center (NOC) team leadership and training</li>
+               <li>Enterprise monitoring and automation platform development</li>
+               <li>Elasticsearch cluster management and optimization for AI workloads</li>
+           </ul>
+       </div>
 
-            <ul>
-                <li>Independently architected and maintained enterprise-class monitoring and automation platform serving mission-critical operations</li>
-                <li>Evolved platform through multiple technology generations:
-                    <ul>
-                        <li>Initial PowerShell/SQL Server implementation</li>
-                        <li>Migration to Elasticsearch for enhanced scalability</li>
-                        <li>Docker containerization with web interface integration</li>
-                        <li>Complete Python/Django rebuild (2024) eliminating licensing costs by $120,000+ annually</li>
-                    </ul>
-                </li>
-            </ul>
+       <div class="competency-section">
+           <h3>Development & Cloud Technologies</h3>
+           <ul>
+               <li>Languages: Python, JavaScript, PowerShell, Bash</li>
+               <li>Frameworks: Django, FastAPI, Flask, REST API development</li>
+               <li>Cloud Services: AWS (S3, API Gateway, Lambda), Zappa serverless deployment</li>
+               <li>AI Platforms: Claude, OpenAI, local LLM deployment and optimization</li>
+               <li>Data Infrastructure: Elasticsearch (clustering, indexing, analytics), enterprise monitoring systems</li>
+           </ul>
+       </div>
+   </div>
 
-            <h4>Advanced System Implementation</h4>
-            <ul>
-                <li>Engineered sophisticated dependency management using modified algorithms for enterprise-scale operations</li>
-                <li>Implemented comprehensive security architecture including AES encryption and SSL/TLS across all interfaces</li>
-                <li>Developed automated integration frameworks for REST APIs and enterprise ticketing systems</li>
-                <li>Created automated power management and firmware update systems across thousands of devices</li>
-            </ul>
+   <div class="section">
+       <h2>Professional Experience</h2>
 
-            <h4>Critical Incident Response</h4>
-            <ul>
-                <li>Led cyber-attack mitigation using advanced log correlation and analysis techniques</li>
-                <li>Developed automated ransomware recovery solutions reducing recovery time from months to days</li>
-                <li>Implemented large-scale security monitoring infrastructure with real-time threat detection</li>
-            </ul>
-        </div>
+       <div class="job">
+           <h3>DevOps Engineer</h3>
+           <div class="company">Volta Inc | 2014-Present</div>
+           <p><em>Official title significantly understates role - independently architected critical enterprise infrastructure while leading security and NOC operations</em></p>
 
-        <div class="job">
-            <h3>Service Desk Analyst</h3>
-            <div class="company">NTT DATA/Kentucky Department of Education | 2011-2014</div>
-            <p><em>Subject Matter Expert for KETS Data Center Services supporting one of the world's largest Active Directory environments</em></p>
-            <ul>
-                <li>Achieved SME status within first year through systematic approach to complex problem-solving</li>
-                <li>Developed PowerShell automation tools for AD management and monitoring before widespread adoption</li>
-                <li>Created automated solutions for backup management and infrastructure maintenance</li>
-            </ul>
-        </div>
-    </div>
+           <h4>Independent AI Safety Research (2024-Present)</h4>
+           <div class="achievement">
+               <strong>Personal Research Project:</strong> Developed breakthrough AI safety framework entirely outside of work responsibilities, without company support, resources, or approval
+           </div>
+           <ul>
+               <li>Independently developed SAM Agent: first known implementation of functional tri-process consciousness architecture extending dual-process theory</li>
+               <li>Created novel solution addressing interpretability, control, and alignment problems simultaneously using personal time</li>
+               <li>Implemented unbypassable moral authority system preventing alignment faking - developed during personal hours</li>
+               <li>Designed transparent metacognitive monitoring system with Elasticsearch integration for comprehensive logging and analytics</li>
+               <li>Achieved production-capable deployment on personal RTX 4090 hardware</li>
+               <li>Sole researcher, architect, and developer - no institutional support or recognition</li>
+           </ul>
 
-    <div class="section">
-        <h2>Technical Expertise</h2>
+           <h4>Enterprise AI Development & Cloud Architecture (2024-Present)</h4>
+           <ul>
+               <li>Developing PRISM: enterprise AI agent system for operations (personal initiative, deployment pending completion)</li>
+               <li>Currently building cloud management interface using Flask, Zappa, S3, and API Gateway for MultiMeter platform</li>
+               <li>Training intern while simultaneously deploying 30 MultiMeter instances across enterprise infrastructure</li>
+               <li>Self-implemented Model Context Protocol (MCP) integrations with Elasticsearch during personal time</li>
+               <li>Enhanced enterprise workflows through personal AI development - preparing for production deployment</li>
+               <li>Demonstrated practical AI capabilities that exceed official job requirements</li>
+           </ul>
 
-        <h3>AI & Machine Learning</h3>
-        <ul>
-            <li>Agentic AI system architecture and deployment</li>
-            <li>Multi-agent system design and coordination</li>
-            <li>Configurable AI safety frameworks and approval workflows</li>
-            <li>Machine learning model training and optimization</li>
-            <li>Large language model integration and fine-tuning</li>
-        </ul>
+           <h4>Security Team Operations & Incident Response (2020-Present)</h4>
+           <ul>
+               <li>Core member of enterprise security team conducting threat hunting and incident response</li>
+               <li>Led cyber-attack mitigation using advanced Elasticsearch log correlation and analysis techniques</li>
+               <li>Developed automated ransomware recovery solutions reducing recovery time from months to days</li>
+               <li>Implemented large-scale security monitoring infrastructure with real-time threat detection via Elasticsearch SIEM</li>
+               <li>Created automated incident response workflows and forensic analysis tools with Elasticsearch backend</li>
+           </ul>
 
-        <h3>Development & Integration</h3>
-        <ul>
-            <li>Languages: Python, PowerShell, JavaScript, Bash</li>
-            <li>Frameworks: Django, REST API development</li>
-            <li>Databases: Elasticsearch, SQL Server</li>
-            <li>Enterprise Integration: Automated ticketing systems, security platforms</li>
-            <li>Web Technologies: HTML, CSS, modern web stack development</li>
-        </ul>
+           <h4>NOC Team Leadership & Enterprise Architecture (2014-Present)</h4>
+           <div class="achievement">
+               Named Volta Company Valedictorian (2022) for transformative enterprise platform creation and leadership
+           </div>
+           <ul>
+               <li>Team lead of Network Operations Center - responsibilities far exceeding DevOps Engineer title</li>
+               <li>Independently architected and built enterprise-class monitoring and automation platform from scratch with Elasticsearch core</li>
+               <li>Created mission-critical infrastructure serving as backbone for enterprise operations</li>
+               <li>Evolved platform through multiple technology generations culminating in Python/Django architecture with Elasticsearch integration</li>
+               <li>Eliminated $120,000+ in annual licensing costs through strategic technology choices and custom development</li>
+               <li>Engineered sophisticated dependency management using modified algorithms for enterprise-scale operations</li>
+               <li>Implemented comprehensive security architecture including AES encryption and SSL/TLS across all interfaces</li>
+               <li>Developed automated integration frameworks for REST APIs and enterprise ticketing systems</li>
+               <li>Created automated power management and firmware update systems across thousands of devices</li>
+           </ul>
 
-        <h3>Enterprise Systems</h3>
-        <ul>
-            <li>Infrastructure Automation: Large-scale deployment and management</li>
-            <li>Security Implementation: Encryption, certificate management, incident response</li>
-            <li>Cloud Services: AWS integration and management</li>
-            <li>Virtualization: VMware, Docker containerization</li>
-            <li>Monitoring: Enterprise-scale logging and alerting systems</li>
-        </ul>
+           <h4>MultiMeter Platform Development (2014-2020)</h4>
+           <p><em>Major enterprise platform development while holding "Field Engineer" title</em></p>
+           <ul>
+               <li>Independently designed and built comprehensive enterprise monitoring platform with Elasticsearch backend</li>
+               <li>Created automated workflow systems that became critical to enterprise operations</li>
+               <li>Developed sophisticated alerting and dependency management systems</li>
+               <li>Demonstrated pattern of operating far above official job title from early career</li>
+           </ul>
+       </div>
 
-        <h3>Specialized Tools & Platforms</h3>
-        <ul>
-            <li>Security Platforms: SentinelOne, Elasticsearch security monitoring</li>
-            <li>Automation: PowerShell, Python scripting, API integration</li>
-            <li>Hardware Management: Cisco CIMC, UPS systems, SNMP</li>
-            <li>Enterprise Software: BigFix, ManageEngine, ticketing systems</li>
-        </ul>
-    </div>
+       <div class="job">
+           <h3>Service Desk Analyst</h3>
+           <div class="company">NTT DATA/Kentucky Department of Education | 2011-2014</div>
+           <p><em>Subject Matter Expert for KETS Data Center Services supporting one of the world's largest Active Directory environments</em></p>
+           <ul>
+               <li>Achieved SME status within first year through systematic approach to complex problem-solving</li>
+               <li>Developed PowerShell automation tools for AD management and monitoring before widespread adoption</li>
+               <li>Created automated solutions for backup management and infrastructure maintenance</li>
+               <li>Supported enterprise-scale directory services for educational institutions statewide</li>
+           </ul>
+       </div>
+   </div>
 
-    <div class="section">
-        <h2>Key Differentiators</h2>
-        <ul>
-            <li><strong>Complete SDLC Ownership:</strong> Proven ability to independently manage all aspects of software development from conception to production deployment</li>
-            <li><strong>Paradigm Transition Expertise:</strong> Successfully evolved from traditional automation to AI-first development approach</li>
-            <li><strong>Independent System Architecture:</strong> Proven ability to single-handedly design, implement, and maintain enterprise-critical systems</li>
-            <li><strong>Rapid Technology Mastery:</strong> Demonstrated pattern of quickly achieving proficiency in emerging technical domains</li>
-            <li><strong>Production AI Deployment:</strong> Real-world experience with agentic AI systems in enterprise environments</li>
-            <li><strong>Cost Optimization:</strong> Track record of eliminating significant licensing costs through strategic technology choices</li>
-        </ul>
-    </div>
+   <div class="page-break"></div>
 
-    <div class="section">
-        <h2>Education</h2>
-        <p><strong>Associate of Computer Science</strong> | Sullivan University | 2011</p>
-        <p><strong>High School Diploma</strong> | Shelby County High School | 2004</p>
-    </div>
+   <div class="section">
+       <h2>Independent AI Safety Research</h2>
+       <ul>
+           <li><strong>SAM Agent Architecture:</strong> Open source implementation of tri-process consciousness framework for AI safety</li>
+           <li><strong>Constitutional AI Implementation:</strong> Working pre-action evaluation system with immutable moral authority</li>
+           <li><strong>Metacognitive Monitoring Systems:</strong> Practical implementation of System 2 oversight for AI agents</li>
+           <li><strong>Enterprise AI Safety Framework:</strong> Production-ready deployment of advanced safety mechanisms with Elasticsearch integration</li>
+       </ul>
+       <p><em>Available for collaboration with AI safety research institutions and organizations working on alignment challenges.</em></p>
+   </div>
 
-    <div class="section">
-        <h2>Notable Achievements</h2>
-        <div class="highlight">
-            Recognized as Company Valedictorian (2022) for transformative automation platform contributions
-        </div>
-        <ul>
-            <li>Transitioned 11-year enterprise platform from traditional automation to AI-powered operations</li>
-            <li>Built production agentic AI systems demonstrating practical autonomous enterprise integration</li>
-            <li>Self-taught modern AI development stack using systematic learning methodology</li>
-            <li>Eliminated $120,000+ in annual licensing costs through strategic technology migration</li>
-            <li>Achieved enterprise-scale AI deployment on consumer hardware through optimization techniques</li>
-        </ul>
-    </div>
+   <div class="section">
+       <h2>Key Differentiators</h2>
+       <ul>
+           <li><strong>Pioneering AI Safety Research:</strong> First known implementation of tri-process consciousness architecture extending dual-process theory to address interpretability, control, and alignment problems simultaneously</li>
+           <li><strong>Novel Theoretical Contribution:</strong> Extended Kahneman's dual-process theory with constitutional oversight layer, creating new framework for AI safety</li>
+           <li><strong>Complete Research Lifecycle:</strong> Independent theoretical development, technical implementation, and practical deployment of breakthrough AI safety architecture</li>
+           <li><strong>Beyond State-of-Art:</strong> Advanced beyond current Constitutional AI and RLHF approaches through pre-action evaluation and immutable oversight</li>
+           <li><strong>Elasticsearch Expertise:</strong> Deep integration of AI systems with Elasticsearch infrastructure, leveraging its prominence in current AI technology stack</li>
+           <li><strong>Independent Innovation:</strong> Sole researcher and developer creating novel solutions to fundamental AI alignment challenges</li>
+           <li><strong>Consistent Excellence:</strong> Pattern of operating far above official job titles and creating mission-critical systems throughout career</li>
+       </ul>
+   </div>
+
+   <div class="section">
+       <h2>Education</h2>
+       <p><strong>Associate of Computer Science</strong> | Sullivan University | 2011</p>
+       <p><strong>High School Diploma</strong> | Shelby County High School | 2004</p>
+
+       <div class="subsection">
+           <h3>Continuous Learning & Research</h3>
+           <ul>
+               <li>Self-directed study in cognitive science, dual-process theory, and consciousness research</li>
+               <li>Advanced AI safety and alignment research through academic papers and practical implementation</li>
+               <li>Constitutional AI and scalable oversight framework development</li>
+               <li>Multi-agent system architecture and metacognitive monitoring design</li>
+               <li>Cloud architecture and serverless deployment strategies</li>
+           </ul>
+       </div>
+   </div>
+
+   <div class="section">
+       <h2>Notable Achievements</h2>
+       <div class="highlight">
+           First known implementation of functional tri-process consciousness architecture for AI systems, extending dual-process theory to address core challenges in AI safety and alignment
+       </div>
+       <ul>
+           <li>Developed breakthrough AI safety framework extending dual-process theory to solve interpretability, control, and alignment problems simultaneously</li>
+           <li>Created working implementation of tri-process architecture and constitutional AI for autonomous agents</li>
+           <li>Pioneering enterprise AI deployment with PRISM system featuring comprehensive safety mechanisms (in development)</li>
+           <li>Recognized as Company Valedictorian (2022) for transformative automation platform contributions</li>
+           <li>Eliminated $120,000+ in annual licensing costs through strategic technology migration</li>
+           <li>Achieved enterprise-scale AI deployment on consumer hardware through advanced optimization</li>
+           <li>Successfully managed concurrent projects: intern training, 30-system deployment, and cloud architecture development</li>
+           <li>Independently transitioned from traditional systems administration to AI safety research leadership</li>
+       </ul>
+   </div>
 </body>
 </html>
