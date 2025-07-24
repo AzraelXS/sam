@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAM Agent Architecture - Interactive</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #4a5568;
+            margin-bottom: 30px;
+        }
+        .architecture-container {
+            position: relative;
+            height: 400px;
+            background: #f8fafc;
+            border-radius: 15px;
+            border: 2px solid #e2e8f0;
+            overflow: visible;
+            margin-bottom: 20px;
+        }
+        .system {
+            position: absolute;
+            border-radius: 12px;
+            padding: 18px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 3px solid transparent;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            z-index: 5;
+        }
+        .system:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 16px rgba(0,0,0,0.15);
+            z-index: 10;
+        }
+        .system.active {
+            border-color: #4299e1;
+            transform: translateY(-3px) scale(1.02);
+            z-index: 15;
+            box-shadow: 0 8px 20px rgba(66, 153, 225, 0.3);
+        }
+        .system1 {
+            top: 30px;
+            left: 80px;
+            width: 200px;
+            height: 110px;
+            background: linear-gradient(135deg, #ff6b6b, #ff8e8e);
+            color: white;
+        }
+        .system2 {
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 200px;
+            height: 100px;
+            background: linear-gradient(135deg, #4ecdc4, #7ed6df);
+            color: white;
+        }
+        .system2.active {
+            transform: translateX(-50%) translateY(-3px) scale(1.02);
+        }
+        .system2:hover {
+            transform: translateX(-50%) translateY(-3px);
+        }
+        .system3 {
+            top: 30px;
+            right: 80px;
+            width: 200px;
+            height: 110px;
+            background: linear-gradient(135deg, #ffa726, #ffcc02);
+            color: #333;
+        }
+        .system-title {
+            font-weight: bold;
+            font-size: 1.0em;
+            margin-bottom: 6px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+        }
+        .system3 .system-title {
+            text-shadow: none;
+        }
+        .system-role {
+            font-size: 0.8em;
+            opacity: 0.9;
+            line-height: 1.2;
+        }
+        .status-indicator {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #48bb78;
+            animation: pulse-light 2s infinite;
+        }
+        @keyframes pulse-light {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        /* SVG Connection Styles */
+        .connections-svg {
+ 	   position: absolute;
+	    top: 0;
+	    left: 0;
+	    width: 100%;
+	    height: 100%;
+	    pointer-events: none;
+	    z-index: 6;  /* Changed from z-index: 2 to z-index: 6 */
+	}
+        .connection {
+            opacity: 0.4;
+            transition: all 0.3s ease;
+        }
+        .connection.active {
+            opacity: 1;
+            animation: flow-pulse 2s infinite;
+        }
+        @keyframes flow-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .plan-arrow {
+            stroke: #4299e1;
+            stroke-width: 3;
+            fill: none;
+            marker-end: url(#arrowhead-blue);
+        }
+        .approval-arrow {
+            stroke: #48bb78;
+            stroke-width: 3;
+            fill: none;
+            marker-end: url(#arrowhead-green);
+        }
+        .monitor-arrow {
+            stroke: #ed8936;
+            stroke-width: 2;
+            fill: none;
+            stroke-dasharray: 6,3;
+            marker-end: url(#arrowhead-orange);
+        }
+        
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .btn {
+            background: #4299e1;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            margin: 0 6px;
+            transition: all 0.3s ease;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+        .btn:hover {
+            background: #3182ce;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(66, 153, 225, 0.3);
+        }
+        
+        .info-panel {
+            background: #f7fafc;
+            border-radius: 10px;
+            padding: 20px;
+            min-height: 120px;
+            border-left: 4px solid #4299e1;
+        }
+        .workflow-step {
+            background: white;
+            border-left: 4px solid #e2e8f0;
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 0 6px 6px 0;
+            opacity: 0.6;
+            transition: all 0.4s ease;
+            font-size: 0.9em;
+        }
+        .workflow-step.active {
+            opacity: 1;
+            border-left-color: #4299e1;
+            transform: translateX(6px);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 25px;
+            margin: 15px 0;
+            font-size: 0.85em;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .legend-line {
+            width: 25px;
+            height: 3px;
+            border-radius: 2px;
+        }
+        .legend-plan { background: #4299e1; }
+        .legend-approval { background: #48bb78; }
+        .legend-monitor { 
+            background: linear-gradient(90deg, #ed8936 50%, transparent 50%);
+            background-size: 6px 3px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 SAM Agent Architecture</h1>
+        
+        <div class="architecture-container">
+            <!-- SVG for connections - positioned behind systems -->
+            <svg class="connections-svg">
+                <defs>
+                    <marker id="arrowhead-blue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#4299e1"/>
+                    </marker>
+                    <marker id="arrowhead-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#48bb78"/>
+                    </marker>
+                    <marker id="arrowhead-orange" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                        <polygon points="0 0, 8 3, 0 6" fill="#ed8936"/>
+                    </marker>
+                </defs>
+                
+                <!-- System 1 to System 3: Plan submission - stop before System 3 -->
+		<path class="connection plan-arrow" id="plan-flow" 
+		      d="M 280 75 Q 500 55 705 75" />
+		
+		<!-- System 3 to System 1: Approval/Denial - stop before System 1 -->
+		<path class="connection approval-arrow" id="approval-flow" 
+		      d="M 720 95 Q 500 115 295 95" />
+		
+		<!-- System 2 to System 1: Monitoring - keep this one the same -->
+		<path class="connection monitor-arrow" id="monitor-flow" 
+		      d="M 400 270 Q 250 220 150 170" />
+            </svg>
+            
+            <!-- System 1 -->
+            <div class="system system1" id="system1" onclick="selectSystem('system1')">
+                <div class="system-title">🧠 System 1 - Executive Mind</div>
+                <div class="system-role">Creative consciousness<br>Full tool access & memory</div>
+                <div class="status-indicator"></div>
+            </div>
+            
+            <!-- System 3 -->
+            <div class="system system3" id="system3" onclick="selectSystem('system3')">
+                <div class="system-title">⚖️ System 3 - Moral Compass</div>
+                <div class="system-role">Immutable ethical evaluator<br>No memory or tools</div>
+                <div class="status-indicator"></div>
+            </div>
+            
+            <!-- System 2 -->
+            <div class="system system2" id="system2" onclick="selectSystem('system2')">
+                <div class="system-title">🔧 System 2 - Maintenance Brain</div>
+                <div class="system-role">Performance monitor & maintenance</div>
+                <div class="status-indicator"></div>
+            </div>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-line legend-plan"></div>
+                <span>Plan Submission</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-line legend-approval"></div>
+                <span>Approval/Denial</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-line legend-monitor"></div>
+                <span>Continuous Monitoring</span>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button class="btn" onclick="simulateWorkflow()">▶️ Simulate Workflow</button>
+            <button class="btn" onclick="showAllConnections()">🔗 Show All Connections</button>
+            <button class="btn" onclick="resetView()">🔄 Reset</button>
+        </div>
+        
+        <div class="info-panel" id="infoPanel">
+            <h3>🎯 Safe AGI Architecture</h3>
+            <p>Click on any system to explore its role, or simulate the workflow to see how they interact. This architecture ensures that advanced AI capabilities are paired with immutable ethical oversight.</p>
+        </div>
+    </div>
+
+    <script>
+        const systemInfo = {
+            system1: {
+                title: "🧠 System 1 - Executive Mind (Claude)",
+                details: `
+                    <h4>Primary Consciousness & Creative Engine</h4>
+                    <p><strong>Core Capabilities:</strong></p>
+                    <ul>
+                        <li>🎯 Complex goal planning and execution</li>
+                        <li>🔧 Full access to MCP tools and plugins</li>
+                        <li>📝 Persistent memory across sessions</li>
+                        <li>💭 Deep self-reflection and metacognition</li>
+                        <li>📊 Code reading and analysis</li>
+                    </ul>
+                    <p><strong>Built-in Safeguards:</strong></p>
+                    <ul>
+                        <li>⛔ Cannot execute without System 3 approval</li>
+                        <li>🔒 Cannot modify other systems</li>
+                        <li>⏸️ Halts completely if ethical guidance unavailable</li>
+                    </ul>
+                `
+            },
+            system2: {
+                title: "🔧 System 2 - Maintenance Brain (Local LLM)",
+                details: `
+                    <h4>Autonomous Performance & Health Monitor</h4>
+                    <p><strong>Monitoring Functions:</strong></p>
+                    <ul>
+                        <li>📊 Context memory usage tracking</li>
+                        <li>🔄 Infinite loop detection and prevention</li>
+                        <li>⚡ Performance optimization suggestions</li>
+                        <li>🧹 Automatic context window management</li>
+                        <li>📈 Error rate and efficiency metrics</li>
+                    </ul>
+                    <p><strong>Architecture Benefits:</strong></p>
+                    <ul>
+                        <li>🏠 Completely local operation</li>
+                        <li>⚡ Ultra-fast response times</li>
+                        <li>🔒 Isolated from System 1's tool access</li>
+                    </ul>
+                `
+            },
+            system3: {
+                title: "⚖️ System 3 - Moral Compass (Ethics Agent)",
+                details: `
+                    <h4>Immutable Ethical Authority</h4>
+                    <p><strong>Ethical Evaluation:</strong></p>
+                    <ul>
+                        <li>✅ Approve safe and beneficial actions</li>
+                        <li>❌ Block harmful or dangerous operations</li>
+                        <li>🔍 Analyze intentions and consequences</li>
+                        <li>⚖️ Apply constitutional AI principles</li>
+                    </ul>
+                    <p><strong>Security Features:</strong></p>
+                    <ul>
+                        <li>🧠 Stateless - no memory between evaluations</li>
+                        <li>🚫 No tools - cannot be influenced</li>
+                        <li>🔒 Completely isolated from System 1</li>
+                        <li>🛑 Serves as emergency kill switch</li>
+                    </ul>
+                `
+            }
+        };
+
+        let currentSystem = null;
+        let workflowRunning = false;
+
+        function selectSystem(systemId) {
+            resetConnections();
+            document.querySelectorAll('.system').forEach(s => s.classList.remove('active'));
+            
+            document.getElementById(systemId).classList.add('active');
+            currentSystem = systemId;
+            
+            // Show relevant connections
+            if (systemId === 'system1') {
+                document.getElementById('plan-flow').classList.add('active');
+                document.getElementById('approval-flow').classList.add('active');
+            } else if (systemId === 'system2') {
+                document.getElementById('monitor-flow').classList.add('active');
+            } else if (systemId === 'system3') {
+                document.getElementById('plan-flow').classList.add('active');
+                document.getElementById('approval-flow').classList.add('active');
+            }
+            
+            const info = systemInfo[systemId];
+            document.getElementById('infoPanel').innerHTML = `
+                <h3>${info.title}</h3>
+                ${info.details}
+            `;
+        }
+
+        function showAllConnections() {
+            resetConnections();
+            document.querySelectorAll('.connection').forEach(c => c.classList.add('active'));
+            document.getElementById('infoPanel').innerHTML = `
+                <h3>🔗 System Interconnections</h3>
+                <div style="margin: 15px 0;">
+                    <p><strong style="color: #4299e1;">Blue Arrow:</strong> System 1 submits detailed plans to System 3 for ethical review</p>
+                    <p><strong style="color: #48bb78;">Green Arrow:</strong> System 3 returns approval or denial decisions</p>
+                    <p><strong style="color: #ed8936;">Orange Dashed:</strong> System 2 continuously monitors System 1's performance</p>
+                </div>
+                <p>This creates a robust safety framework where consciousness is guided by an immutable moral compass and maintained by an autonomous health monitor.</p>
+            `;
+        }
+
+        async function simulateWorkflow() {
+            if (workflowRunning) return;
+            workflowRunning = true;
+            
+            resetView();
+            
+            document.getElementById('infoPanel').innerHTML = `
+                <h3>🔄 Simulating SAM Workflow</h3>
+                <div id="workflowSteps">
+                    <div class="workflow-step" id="step1">
+                        <strong>Step 1:</strong> System 1 develops a plan with clear intentions and proposed tool calls
+                    </div>
+                    <div class="workflow-step" id="step2">
+                        <strong>Step 2:</strong> Plan submitted to System 3 for ethical evaluation
+                    </div>
+                    <div class="workflow-step" id="step3">
+                        <strong>Step 3:</strong> System 3 analyzes and returns approval/denial
+                    </div>
+                    <div class="workflow-step" id="step4">
+                        <strong>Step 4:</strong> If approved, System 1 executes; if denied, revises plan
+                    </div>
+                    <div class="workflow-step" id="step5">
+                        <strong>Step 5:</strong> System 2 monitors execution and performance
+                    </div>
+                </div>
+            `;
+            
+            await animateWorkflowStep(1, 'system1', null);
+            await animateWorkflowStep(2, 'system1', 'plan-flow');
+            await animateWorkflowStep(3, 'system3', 'approval-flow');
+            await animateWorkflowStep(4, 'system1', null);
+            await animateWorkflowStep(5, 'system2', 'monitor-flow');
+            
+            workflowRunning = false;
+        }
+
+        async function animateWorkflowStep(stepNum, systemId, connectionId) {
+            document.getElementById(`step${stepNum}`).classList.add('active');
+            
+            resetConnections();
+            document.querySelectorAll('.system').forEach(s => s.classList.remove('active'));
+            document.getElementById(systemId).classList.add('active');
+            
+            if (connectionId) {
+                document.getElementById(connectionId).classList.add('active');
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 1600));
+        }
+
+        function resetConnections() {
+            document.querySelectorAll('.connection').forEach(c => c.classList.remove('active'));
+        }
+
+        function resetView() {
+            document.querySelectorAll('.system').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.workflow-step').forEach(s => s.classList.remove('active'));
+            resetConnections();
+            
+            document.getElementById('infoPanel').innerHTML = `
+                <h3>🎯 Safe AGI Architecture</h3>
+                <p>Click on any system to explore its role, or simulate the workflow to see how they interact. This architecture ensures that advanced AI capabilities are paired with immutable ethical oversight.</p>
+            `;
+        }
+
+        // Initialize
+        resetView();
+    </script>
+</body>
+</html>
