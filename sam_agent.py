@@ -597,6 +597,24 @@ class SAMAgent:
         if connect_mcp_on_startup:
             self._connect_mcp_on_startup()
 
+        self._auto_enable_system3()
+
+    def _auto_enable_system3(self):
+        """Auto-enable System 3 if configured to do so"""
+        try:
+            # Check if System 3 should be auto-enabled
+            system3_config = self.raw_config.get('system3', {})
+
+            if (system3_config.get('enabled', False) and
+                    system3_config.get('auto_enable', False) and
+                    SYSTEM3_AVAILABLE):
+                use_claude = system3_config.get('use_claude', False)
+                self.enable_conscience(use_claude=use_claude, test_mode=False)
+                logger.info("🛡️ System 3 auto-enabled from configuration")
+
+        except Exception as e:
+            logger.error(f"Failed to auto-enable System 3: {e}")
+
     def enable_conscience(self, use_claude: bool = False, test_mode: bool = False) -> str:  # Change default to False
         """
         Enable System 3 moral authority (conscience) for this agent

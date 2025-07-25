@@ -161,9 +161,9 @@
     "timeout": 300
   },
   "system3": {
-    "enabled": false,
+    "enabled": true,
     "use_claude": false,
-    "auto_enable": false,
+    "auto_enable": true,
     "log_evaluations": true,
     "require_approval_threshold": "moderate",
     "evaluation_timeout": 30,
