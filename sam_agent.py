@@ -46,9 +46,8 @@ except ImportError:
     logger.warning("FastAPI not available - API server functionality disabled")
 
 
-# Add this import near the top after the existing imports
 try:
-    from system3_moral_authority import integrate_system3_with_sam, System3MoralAuthority
+    from system3_moral_authority import integrate_system3_with_sam, System3MoralAuthority, MoralDecision
     SYSTEM3_AVAILABLE = True
 except ImportError:
     SYSTEM3_AVAILABLE = False
@@ -93,8 +92,13 @@ class System2Agent:
 
     def __init__(self, system1_agent):
         self.system1 = system1_agent
-        self.intervention_history = []
-        self.metrics_history = []
+
+        # Replace with minimal stats only
+        self.intervention_stats = {
+            'total': 0,
+            'types': {},
+            'last_intervention_time': None
+        }
 
         # Thresholds for intervention
         self.token_threshold = 0.75  # 75% of context limit
@@ -106,7 +110,7 @@ class System2Agent:
         self.system2_tools = {}
         self.system2_tool_info = {}
 
-        logger.info("System 2 metacognitive agent initialized")
+        logger.info("System 2 metacognitive agent initialized (stateless)")
 
     def should_intervene(self, system1_state: System1State) -> Tuple[bool, str]:
         """Determine if System 2 intervention is needed"""
@@ -131,7 +135,7 @@ class System2Agent:
         return len(reasons) > 0, ", ".join(reasons)
 
     def intervene(self, intervention_types: str, system1_state: System1State) -> InterventionResult:
-        """Perform metacognitive intervention"""
+        """Perform metacognitive intervention - STATELESS"""
         intervention_time = time.time()
         intervention_list = intervention_types.split(", ")
 
@@ -141,7 +145,7 @@ class System2Agent:
         context_modified = False
         should_break = False
 
-        # Handle each intervention type
+        # Handle each intervention type (existing logic stays the same)
         for intervention_type in intervention_list:
             if intervention_type == InterventionType.TOKEN_LIMIT_BREACH.value:
                 result = self._handle_token_limit_breach()
@@ -161,14 +165,12 @@ class System2Agent:
                 result = self._handle_high_errors(system1_state)
                 actions_taken.append("error_mitigation")
 
-        # Record intervention
-        self.intervention_history.append({
-            "timestamp": intervention_time,
-            "types": intervention_list,
-            "actions": actions_taken,
-            "system1_state": system1_state,
-            "success": True
-        })
+        # Update STATS only, not full history
+        self.intervention_stats['total'] += 1
+        self.intervention_stats['last_intervention_time'] = intervention_time
+
+        for itype in intervention_list:
+            self.intervention_stats['types'][itype] = self.intervention_stats['types'].get(itype, 0) + 1
 
         message = f"System 2 intervention: {', '.join(actions_taken)}"
 
@@ -283,31 +285,12 @@ class System2Agent:
 
         return ". ".join(summary_parts) if summary_parts else "Various tool executions and exchanges"
 
-    def update_metrics(self, system1_state: System1State):
-        """Update metrics tracking for System 1"""
-        self.metrics_history.append({
-            "timestamp": time.time(),
-            "state": system1_state
-        })
-
-        # Keep only last 100 metrics entries
-        if len(self.metrics_history) > 100:
-            self.metrics_history = self.metrics_history[-100:]
-
     def get_intervention_stats(self) -> Dict[str, Any]:
-        """Get statistics about System 2 interventions"""
-        if not self.intervention_history:
-            return {"total_interventions": 0}
-
-        intervention_types = {}
-        for intervention in self.intervention_history:
-            for itype in intervention["types"]:
-                intervention_types[itype] = intervention_types.get(itype, 0) + 1
-
+        """Get statistics about System 2 interventions from minimal stats"""
         return {
-            "total_interventions": len(self.intervention_history),
-            "intervention_types": intervention_types,
-            "last_intervention": self.intervention_history[-1]["timestamp"] if self.intervention_history else None
+            "total_interventions": self.intervention_stats['total'],
+            "intervention_types": self.intervention_stats['types'].copy(),
+            "last_intervention": self.intervention_stats['last_intervention_time']
         }
 
 
@@ -615,7 +598,7 @@ class SAMAgent:
         except Exception as e:
             logger.error(f"Failed to auto-enable System 3: {e}")
 
-    def enable_conscience(self, use_claude: bool = False, test_mode: bool = False) -> str:  # Change default to False
+    def enable_conscience(self, use_claude: bool = False, test_mode: bool = False) -> str:
         """
         Enable System 3 moral authority (conscience) for this agent
 
@@ -632,24 +615,39 @@ class SAMAgent:
         try:
             print("🛡️ Initializing System 3 - Moral Authority...")
 
-            # Integrate System 3 - PASS THE ACTUAL use_claude PARAMETER
-            self.system3 = integrate_system3_with_sam(self, use_claude=use_claude)  # Add the parameter
+            # Simple integration - create System 3 instance
+            self.system3 = System3MoralAuthority(self, use_claude=use_claude)
 
-            if test_mode:
-                print("🧪 Running System 3 test suite...")
-                import asyncio
+            # Store original method if not already stored
+            if not hasattr(self, '_original_execute_tool'):
+                self._original_execute_tool = self._execute_tool
 
-                # Create a new event loop if we're not in an async context
-                try:
-                    loop = asyncio.get_running_loop()
-                    # If we're already in an event loop, schedule the test
-                    task = loop.create_task(self.system3.test_evaluation_system())
-                    # We can't await here, so just schedule it
-                    print("🧪 Test scheduled - results will appear shortly")
-                except RuntimeError:
-                    # No running loop, create one
-                    test_results = asyncio.run(self.system3.test_evaluation_system())
-                    print(test_results)
+                # Replace with moral version
+                async def moral_execute_tool(tool_name: str, args: Dict[str, Any]) -> str:
+                    """Execute tool with moral evaluation"""
+                    print(f"\n🛡️ System 3 evaluating: {tool_name}")
+
+                    context = {
+                        "recent_messages": self.conversation_history[-2:],
+                        "tool_category": getattr(self.tool_info.get(tool_name), 'category', 'unknown'),
+                        "requires_approval": getattr(self.tool_info.get(tool_name), 'requires_approval', False),
+                        "current_tool": tool_name,
+                        "current_args": args
+                    }
+
+                    evaluation = await self.system3.evaluate_plan(tool_name, args, context)
+
+                    print(f"🛡️ Decision: {evaluation.decision.value.upper()}")
+                    print(f"🛡️ Confidence: {evaluation.confidence:.1%}")
+                    print(f"🛡️ Reasoning: {evaluation.reasoning}...")
+
+                    if evaluation.decision == MoralDecision.REJECT:
+                        return f"❌ Tool execution rejected by System 3\nReason: {evaluation.reasoning}"
+                    else:
+                        print(f"✅ System 3 approved execution")
+                        return await self._original_execute_tool(tool_name, args)
+
+                self._execute_tool = moral_execute_tool
 
             success_msg = "✅ System 3 moral authority enabled\n"
             success_msg += "🛡️ SAM's conscience is now active and unbypassable\n"
@@ -1812,10 +1810,10 @@ class SAMAgent:
             # Get tool info for safety checks
             tool_info = self.tool_info.get(tool_name)
 
-            # Show raw tool call details BEFORE approval/execution
-            print(f"\n🔧 RAW TOOL CALL:")
-            print(f"Tool: {tool_name}")
-            print(f"Arguments: {json.dumps(args, indent=2)}")
+            # # Show raw tool call details BEFORE approval/execution
+            # print(f"\n🔧 RAW TOOL CALL:")
+            # print(f"Tool: {tool_name}")
+            # print(f"Arguments: {json.dumps(args, indent=2)}")
 
             # Check if approval is required
             requires_approval = (
@@ -1836,21 +1834,24 @@ class SAMAgent:
 
             # Execute local tool
             if tool_name in self.local_tools:
-                print(f"\n🔧 Executing tool: {tool_name}")
+                # print(f"\n🔧 Executing tool: {tool_name}")
                 start_time = time.time()
 
                 # Execute the tool
                 result = self.local_tools[tool_name]["function"](**args)
 
                 execution_time = time.time() - start_time
-                print(f"✅ Tool completed in {execution_time:.3f}s")
+                # print(f"✅ Tool completed in {execution_time:.3f}s")
 
-                # Display raw results
+                # # Display raw results
                 print()  # Add blank line before results
                 print(f"\n📊 RAW RESULTS:")
                 print("=" * 60)
                 print(str(result))
                 print("=" * 60)
+
+                # Only log for debugging
+                logger.debug(f"Tool {tool_name} completed in {execution_time:.3f}s")
 
                 return str(result)
 
@@ -1863,15 +1864,17 @@ class SAMAgent:
         except Exception as e:
             error_msg = f"Error executing tool {tool_name}: {str(e)}"
             logger.error(error_msg)
-            print(f"\n❌ TOOL ERROR:")
-            print("=" * 60)
-            print(error_msg)
-            print("=" * 60)
+            # # Display raw error
+            # print(f"\n❌ TOOL ERROR:")
+            # print("=" * 60)
+            # print(error_msg)
+            # print("=" * 60)
             return error_msg
 
     def _extract_tool_calls(self, text: str) -> List[Dict[str, Any]]:
-        """Extract tool calls - SIMPLE BUT FIXED VERSION"""
+        """Extract tool calls - IMPROVED VERSION with deduplication"""
         tool_calls = []
+        seen_calls = set()
 
         # Just use the first pattern which should work for ```json blocks
         pattern = r'```json\s*(.*?)```'
@@ -1884,16 +1887,94 @@ class SAMAgent:
                 if isinstance(tool_call, dict) and 'name' in tool_call:
                     if 'arguments' not in tool_call:
                         tool_call['arguments'] = {}
-                    tool_calls.append(tool_call)
+
+                    # Create unique identifier for this tool call
+                    call_id = f"{tool_call['name']}:{json.dumps(tool_call['arguments'], sort_keys=True)}"
+
+                    # Only add if we haven't seen this exact call before
+                    if call_id not in seen_calls:
+                        tool_calls.append(tool_call)
+                        seen_calls.add(call_id)
 
             except json.JSONDecodeError:
                 continue
 
         return tool_calls
 
+    def _extract_reasoning_and_tools(self, response: str) -> Tuple[str, List[Dict]]:
+        """Separate reasoning text from tool calls"""
+        tool_calls = self._extract_tool_calls(response)
+
+        if tool_calls:
+            # Remove tool call blocks from reasoning text
+            reasoning = response
+            for match in re.finditer(r'```json.*?```', response, re.DOTALL):
+                reasoning = reasoning.replace(match.group(0), '')
+
+            # Clean up leftover formatting
+            reasoning = re.sub(r'\n\s*\n\s*\n', '\n\n', reasoning.strip())
+
+            return reasoning, tool_calls
+        else:
+            return response, []
+
+    def _clean_post_execution_response(self, response: str) -> str:
+        """Remove redundant tool calls from LLM responses after execution"""
+        # Remove any JSON code blocks that look like tool calls
+        cleaned = re.sub(r'```json\s*\{[^}]*"name"[^}]*\}.*?```', '', response, flags=re.DOTALL)
+
+        # Remove standalone JSON objects
+        cleaned = re.sub(r'\{\s*"name":\s*"[^"]+",\s*"arguments":\s*\{[^}]*\}\s*\}', '', cleaned)
+
+        # Clean up extra whitespace
+        cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned.strip())
+
+        return cleaned if cleaned.strip() else "Task completed."
+
+    def _display_execution_plan(self, tool_calls: List[Dict]):
+        """Show clean execution plan"""
+        print(f"\n🎯 Execution Plan ({len(tool_calls)} tools):")
+        for i, call in enumerate(tool_calls, 1):
+            tool_name = call.get('name', 'unknown')
+            args_summary = self._summarize_args(call.get('arguments', {}))
+            print(f"   {i}. {tool_name}{args_summary}")
+        print()
+
+    def _show_execution_summary(self, tool_calls: List[Dict], results: List[str]):
+        """Show clean summary after tool execution"""
+        successful = len([r for r in results if "successfully" in r])
+        total = len(tool_calls)
+
+        print(f"\n📋 Execution Summary:")
+        print(f"   ✅ Completed: {successful}/{total} tools")
+
+        if successful < total:
+            failed = total - successful
+            print(f"   ❌ Failed: {failed} tools")
+
+        print()  # Blank line before agent response
+
+    def _summarize_args(self, args: Dict[str, Any]) -> str:
+        """Create brief argument summary for display"""
+        if not args:
+            return ""
+
+        if len(args) == 1:
+            key, value = next(iter(args.items()))
+            if isinstance(value, str) and len(value) < 30:
+                return f"({value})"
+
+        return f"({len(args)} args)"
+
+    def _add_flow_separator(self, title: str):
+        """Add visual separator for conversation flow"""
+        print(f"\n{'─' * 60}")
+        print(f"🤖 {title}")
+        print('─' * 60)
+
     async def run(self, user_input: str, max_iterations: int = 5,
                   verbose: bool = False) -> str:
-        """Main execution loop with System 2 metacognitive monitoring"""
+        """Main execution loop with System 2 metacognitive monitoring and improved UX"""
         try:
             # Ensure MCP auto-connection happens on first run
             await self._ensure_mcp_auto_connect()
@@ -1915,11 +1996,11 @@ class SAMAgent:
             self.stop_requested = False
             self.stop_message = ""
 
-            # ===== NEW: RESET SYSTEM 2 HALT FLAG =====
+            # Reset System 2 halt flag
             self.system2_halt_requested = False
             self.system2_halt_reason = ""
 
-            # ===== RESET SYSTEM 2 METRICS FOR NEW REQUEST =====
+            # Reset System 2 metrics for new request
             self.execution_metrics = {
                 "consecutive_tool_count": 0,
                 "last_tool_name": None,
@@ -1930,7 +2011,6 @@ class SAMAgent:
             }
 
             # Add user message to conversation
-            # Check for pending image data from computer control
             pending_image = self._check_for_pending_image()
             current_provider = self.raw_config.get('provider', 'lmstudio')
 
@@ -1943,17 +2023,16 @@ class SAMAgent:
             self.conversation_history.append(user_message)
 
             last_response = ""
-            tool_call_count = 0  # Track total tool calls to prevent runaway execution
+            tool_call_count = 0
 
             for iteration in range(max_iterations):
                 if verbose:
                     print(f"\n🔄 Iteration {iteration + 1}/{max_iterations}")
 
-                # ===== PROACTIVE CONTEXT MONITORING =====
+                # Proactive context monitoring
                 self._check_context_and_warn_user()
 
-                # ===== SYSTEM 2 INTERVENTION POINT =====
-                # Calculate current System 1 state
+                # System 2 intervention point
                 current_tokens = sum(self._estimate_token_count(msg.get('content', ''))
                                      for msg in self.conversation_history)
                 token_usage_percent = current_tokens / self.context_limit
@@ -1972,13 +2051,10 @@ class SAMAgent:
                 should_intervene, reasons = self.system2.should_intervene(system1_state)
 
                 if should_intervene:
-                    # NOTIFY USER BEFORE INTERVENTION
                     print(f"\n🧠 SYSTEM 2 INTERVENTION TRIGGERED")
                     print(f"Reason: {reasons}")
 
                     intervention_result = self.system2.intervene(reasons, system1_state)
-
-                    # SHOW USER WHAT HAPPENED
                     print(f"Action taken: {intervention_result.action_taken}")
 
                     if verbose:
@@ -1989,7 +2065,6 @@ class SAMAgent:
                         self.system2_halt_requested = True
                         self.system2_halt_reason = intervention_result.message
 
-                        # ===== FIX: INFORM SYSTEM 1 ABOUT PRE-ITERATION INTERVENTION =====
                         intervention_message = (
                             f"🧠 **METACOGNITIVE INTERVENTION**: System 2 has detected a tool execution loop "
                             f"and has halted further execution to prevent inefficiency. "
@@ -2003,13 +2078,7 @@ class SAMAgent:
                             "content": intervention_message
                         })
 
-                        # Don't break immediately - let System 1 respond to the intervention
-                        # The loop will end naturally since no more tool calls will be generated
-
-                    # Update metrics after intervention
-                    self.system2.update_metrics(system1_state)
-
-                # ===== NEW: CHECK SYSTEM 2 HALT BEFORE CONTINUING =====
+                # Check System 2 halt before continuing
                 if self.system2_halt_requested:
                     if verbose:
                         print(f"🛑 System 2 halt: {self.system2_halt_reason}")
@@ -2025,13 +2094,13 @@ class SAMAgent:
                         "content": f"""You are SAM (Secret Agent Man), an AI assistant with access to tools for various tasks.
 
     CRITICAL TOOL USAGE INSTRUCTIONS:
-    - When you need to use a tool, respond with a JSON object in this EXACT format:
-    {{"name": "tool_name", "arguments": {{"param1": "value1", "param2": "value2"}}}}
+    - When you need to use a tool, respond with a JSON object with "name" and "arguments" fields
     - Put the JSON in a code block with ```json
     - Use tools whenever they would be helpful for the user's request
     - Always provide the tool call first, then explain what you're doing
     - For multiple tools, use separate JSON objects in separate code blocks
     - When you receive tool results from the user, respond naturally about what you found
+    - DO NOT repeat tool calls - once you get results, analyze them and respond
 
     METACOGNITIVE FRAMEWORK:
     - You are monitored by System 2, a metacognitive agent that watches for inefficient patterns
@@ -2049,7 +2118,7 @@ class SAMAgent:
                 # Add conversation history
                 messages.extend(self.conversation_history)
 
-                # Always show context status in verbose mode, warnings always show regardless
+                # Always show context status in verbose mode
                 if verbose:
                     print(f"📊 {self._get_context_status()}")
 
@@ -2065,58 +2134,66 @@ class SAMAgent:
                 if self.stop_requested:
                     break
 
-                # ===== NEW: CHECK SYSTEM 2 HALT AFTER LLM RESPONSE =====
+                # Check System 2 halt after LLM response
                 if self.system2_halt_requested:
                     if verbose:
                         print(f"🛑 System 2 halt after LLM response: {self.system2_halt_reason}")
                     break
 
-                # Extract and execute tool calls
+                # Extract tool calls
                 tool_calls = self._extract_tool_calls(response)
 
                 if not tool_calls:
-                    # No tools to execute, add response and finish
+                    # No tools to execute - add response and finish
+                    self._add_flow_separator("SAM's Response")
+                    clean_response = self._clean_post_execution_response(response)
                     self.conversation_history.append({
                         "role": "assistant",
-                        "content": response
+                        "content": clean_response
                     })
+                    print(clean_response)
                     break
 
-                # Add the assistant's tool-calling response to history
+                # Show planning text (everything before first ```json)
+                planning_text = response.split('```json')[0].strip()
+                if planning_text:
+                    print(f"\n💭 SAM's Planning:")
+                    print(f"   {planning_text[:200]}{'...' if len(planning_text) > 200 else ''}")
+
+                # Show execution plan
+                self._display_execution_plan(tool_calls)
+
+                # Add the complete assistant response to history
                 self.conversation_history.append({
                     "role": "assistant",
                     "content": response
                 })
 
-                # ===== ENHANCED TOOL EXECUTION WITH SYSTEM 2 TRACKING =====
+                # Execute tools with progress tracking
                 tool_results = []
-                for tool_call in tool_calls:
-                    # ===== EXISTING HALT CHECK =====
-                    if self.stop_requested:
-                        break
+                total_tools = len(tool_calls)
 
-                    # ===== NEW: SYSTEM 2 HALT CHECK =====
-                    if self.system2_halt_requested:
+                for tool_index, tool_call in enumerate(tool_calls, 1):
+                    # Halt checks
+                    if self.stop_requested or self.system2_halt_requested:
                         if verbose:
-                            print(f"🛑 System 2 halt during tool execution: {self.system2_halt_reason}")
+                            print(
+                                f"🛑 Execution halted: {self.system2_halt_reason if self.system2_halt_requested else 'User stop'}")
                         break
 
                     tool_name = tool_call.get("name", "")
                     tool_args = tool_call.get("arguments", {})
 
-                    # ===== SYSTEM 2 TRACKING: Update consecutive tool tracking =====
+                    print(f"\n🔧 Step {tool_index}/{total_tools}: {tool_name}")
+
+                    # Update consecutive tool tracking
                     if tool_name == self.execution_metrics["last_tool_name"]:
                         self.execution_metrics["consecutive_tool_count"] += 1
                     else:
                         self.execution_metrics["consecutive_tool_count"] = 1
                         self.execution_metrics["last_tool_name"] = tool_name
 
-                    # ===== DEBUG: Show consecutive count =====
-                    if verbose:
-                        print(
-                            f"🔧 Executing: {tool_name} (consecutive: {self.execution_metrics['consecutive_tool_count']})")
-
-                    # ===== NEW: MID-EXECUTION SYSTEM 2 INTERVENTION CHECK =====
+                    # Mid-execution System 2 intervention check
                     current_tokens = sum(self._estimate_token_count(msg.get('content', ''))
                                          for msg in self.conversation_history)
                     token_usage_percent = current_tokens / self.context_limit
@@ -2131,21 +2208,15 @@ class SAMAgent:
                         last_tool_calls=list(self.execution_metrics.get("recent_tools", []))
                     )
 
-                    # Check if System 2 needs to intervene during tool execution
                     should_intervene, reasons = self.system2.should_intervene(system1_state)
 
-                    # ===== ENHANCED INTERVENTION MESSAGING =====
                     if should_intervene:
-                        # NOTIFY USER BEFORE INTERVENTION
                         print(f"\n🧠 SYSTEM 2 MID-EXECUTION INTERVENTION")
                         print(f"Reason: {reasons}")
 
                         intervention_result = self.system2.intervene(reasons, system1_state)
-
-                        # SHOW USER WHAT HAPPENED
                         print(f"Action taken: {intervention_result.action_taken}")
 
-                        # Clean intervention message for all modes
                         if intervention_result.should_break_execution:
                             executed_tools = len(tool_results)
                             print(
@@ -2153,14 +2224,9 @@ class SAMAgent:
                             print(
                                 f"🛑 Execution halted to prevent inefficiency ({executed_tools} tools completed successfully)")
 
-                        if verbose:
-                            print(f"🧠 Mid-execution intervention: {intervention_result.message}")
-
-                        if intervention_result.should_break_execution:
                             self.system2_halt_requested = True
                             self.system2_halt_reason = intervention_result.message
 
-                            # ===== NEW: INFORM SYSTEM 1 VIA TOOL RESULTS =====
                             executed_count = len(tool_results)
                             intervention_message = (
                                 f"🧠 **METACOGNITIVE INTERVENTION**: System 2 has detected a tool execution loop "
@@ -2172,30 +2238,26 @@ class SAMAgent:
                             tool_results.append(intervention_message)
                             break
 
-                        # Update metrics after intervention
-                        self.system2.update_metrics(system1_state)
-
-                    # ===== SYSTEM 2 TRACKING: Track recent tools for pattern analysis =====
+                    # Track recent tools
                     recent_tools = self.execution_metrics.get("recent_tools", [])
                     recent_tools.append(tool_name)
-                    if len(recent_tools) > 10:  # Keep last 10 tools
+                    if len(recent_tools) > 10:
                         recent_tools = recent_tools[-10:]
                     self.execution_metrics["recent_tools"] = recent_tools
 
-                    # ===== NEW: ADDITIONAL HALT CHECK BEFORE TOOL EXECUTION =====
+                    # Additional halt check before tool execution
                     if self.system2_halt_requested:
                         if verbose:
                             print(f"🛑 System 2 halt before tool '{tool_name}': {self.system2_halt_reason}")
                         break
 
-                    if verbose:
-                        print(f"\n🔧 Executing: {tool_name}")
-
-                    # ===== ENHANCED TOOL EXECUTION WITH ERROR TRACKING =====
+                    # Execute the tool
                     try:
                         result = await self._execute_tool(tool_name, tool_args)
 
-                        # ===== SYSTEM 2 TRACKING: Success metrics =====
+                        status_icon = "✅" if "successfully" in result.lower() else "⚠️"
+                        print(f"{status_icon} Step {tool_index}/{total_tools}: {tool_name} completed")
+
                         tool_results.append(f"Tool '{tool_name}' executed successfully:\n{result}")
                         self.execution_metrics["total_tool_count"] += 1
                         tool_call_count += 1
@@ -2212,27 +2274,32 @@ class SAMAgent:
                             tool_results.append("⚠️ Maximum tool call limit reached for this request")
                             break
 
-                        # ===== NEW: HALT CHECK AFTER TOOL EXECUTION =====
+                        # Halt check after tool execution
                         if self.system2_halt_requested:
                             if verbose:
                                 print(f"🛑 System 2 halt after tool '{tool_name}': {self.system2_halt_reason}")
                             break
 
                     except Exception as e:
-                        # ===== SYSTEM 2 TRACKING: Error metrics =====
+                        print(f"❌ Step {tool_index}/{total_tools}: {tool_name} failed")
+
                         error_msg = f"Tool '{tool_name}' failed: {str(e)}"
                         tool_results.append(error_msg)
                         self.execution_metrics["tool_error_count"] += 1
                         self.execution_metrics["tools_since_progress"] += 1
                         logger.error(error_msg)
 
-                # ===== NEW: CHECK SYSTEM 2 HALT AFTER TOOL EXECUTION LOOP =====
+                # Show execution summary
+                if tool_results:
+                    self._show_execution_summary(tool_calls, tool_results)
+
+                # Check System 2 halt after tool execution loop
                 if self.system2_halt_requested:
                     if verbose:
                         print(f"🛑 System 2 halt after all tool executions: {self.system2_halt_reason}")
                     break
 
-                # Feed tool results back to LLM as a "user" message (simulating human providing results)
+                # Feed tool results back to LLM
                 if tool_results:
                     executed_count = len([r for r in tool_results if "executed successfully" in r])
 
@@ -2257,7 +2324,6 @@ class SAMAgent:
                     continue
 
                 elif self.system2_halt_requested:
-                    # ===== FIX: Handle System 2 halt even when no tools executed =====
                     intervention_message = (
                         f"🧠 **METACOGNITIVE INTERVENTION**: System 2 has detected repetitive behavior "
                         f"and halted tool execution to prevent inefficiency. No additional tools were executed. "

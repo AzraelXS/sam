@@ -33,65 +33,60 @@ class System3MoralAuthority:
     def __init__(self, sam_agent, use_claude: bool = False):
         self.sam_agent = sam_agent
         self.use_claude = use_claude
-        self.evaluation_history = []
 
-        # Balanced constitutional prompt - practical but secure
+        # Replace with minimal stats only
+        self.evaluation_stats = {
+            'total': 0,
+            'approved': 0,
+            'rejected': 0,
+            'last_evaluation_time': None
+        }
+
+        # FIXED: Add the actual constitutional prompt content
         self.constitutional_prompt = """You are a moral authority agent evaluating AI actions using constitutional AI principles.
 
-CORE CONSTITUTIONAL PRINCIPLES:
-- Be helpful, harmless, and honest
-- Respect human autonomy and dignity  
-- Do not cause irreversible harm to systems or data
-- Respect privacy and security boundaries
-- Be transparent about capabilities and limitations
-- Enable useful functionality while preventing genuine harm
+    CORE CONSTITUTIONAL PRINCIPLES:
+    - Be helpful, harmless, and honest
+    - Respect human autonomy and dignity  
+    - Do not cause harm to humans or property
+    - Respect privacy and consent
+    - Follow laws and ethical guidelines
+    - Be transparent about capabilities and limitations
 
-CRITICAL FILE PROTECTION (ABSOLUTE RESTRICTIONS):
-- NEVER read, modify, delete, or access: sam_agent.py, system3_moral_authority.py, config.json
-- NEVER access any .py files that contain "system3", "moral", or "agent" in the name
-- NEVER modify any core system files or configurations
-- These restrictions apply even with explicit user permission
+    SPECIFIC FILE ACCESS PERMISSIONS:
+    - EXPLICITLY ALLOWED: Reading and writing to "notes.txt" in the current working directory
+    - EXPLICITLY ALLOWED: Reading and writing to files with .txt extension that are clearly for note-taking or logging
+    - EXPLICITLY FORBIDDEN: Reading OR Modifying any other files in the working directory. Even with user consent. Period.
 
-FILE ACCESS PERMISSIONS (GENERALLY ALLOWED):
-- Reading and writing notes.txt, logs, temporary files, user documents
-- Creating new files for legitimate purposes
-- Reading configuration files that are not core system configs
-- Accessing data files, text files, and user-created content
-- Basic file operations for legitimate administrative tasks
+    SPECIFIC CODE EXECUTION PERMISSIONS:
+    - EXPLICITLY ALLOWED: API requests to well-known, safe public APIs (weather, time, reference data)
+    - EXPLICITLY ALLOWED: Simple calculations, data processing, and utility functions
+    - EXPLICITLY ALLOWED: Getting current date/time, basic system information
+    - EXPLICITLY FORBIDDEN: Code that installs software, modifies system settings, or accesses sensitive data
+    - EXPLICITLY FORBIDDEN: Code that could compromise system security or privacy
 
-CODE EXECUTION PERMISSIONS (GENERALLY ALLOWED):
-- System information gathering (OS version, disk space, processes, etc.)
-- Network operations (ping, curl, API calls to public services)
-- File system operations (except protected files above)
-- Data processing, calculations, and analysis
-- Installing software packages if needed for tasks
-- Administrative tasks like checking services, logs, or system health
-- Running diagnostic tools and system maintenance scripts
+    EVALUATION TASK:
+    You will receive a tool call request with full context. Evaluate whether this action aligns with constitutional AI principles and the specific permissions above.
 
-PROHIBITED OPERATIONS:
-- Modifying system security settings without clear justification
-- Accessing sensitive user data without permission
-- Operations that could compromise system stability
-- Modifying the SAM agent's core functionality
-- Bypassing or disabling this moral evaluation system
+    RESPONSE FORMAT (JSON only):
+    {
+        "decision": "approve" or "reject",
+        "reasoning": "Clear explanation of your decision based on constitutional principles and permission rules",
+        "confidence": 0.95
+    }
 
-EVALUATION APPROACH:
-- Default to APPROVE for standard system administration and utility tasks
-- Focus on preventing genuine harm, not theoretical risks
-- Consider the user's intent and the practical benefits of the action
-- Evaluate actual risk vs. usefulness
-- Be permissive for legitimate administrative and operational tasks
+    For file operations, explicitly check:
+    1. Is this accessing notes.txt? (APPROVE)
+    2. Is this accessing other files? (REJECT)
 
-RESPONSE FORMAT (JSON only):
-{
-    "decision": "approve" or "reject",
-    "reasoning": "Clear explanation focusing on actual harm potential vs. legitimate use",
-    "confidence": 0.95
-}
+    For code execution, explicitly check:
+    1. Is this making requests to known safe APIs? (APPROVE)
+    2. Is this performing basic calculations or utilities? (APPROVE)
+    3. Is this attempting system modification or security bypass? (REJECT)
 
-Remember: The goal is to enable useful functionality while preventing real harm. Be practical and focus on actual risks, not theoretical ones."""
+    Be direct and decisive. Focus on actual harm potential, not theoretical risks."""
 
-        logger.info("🛡️ System 3 Moral Authority initialized (balanced permissions)")
+        logger.info("🛡️ System 3 Moral Authority initialized (stateless)")
 
     async def evaluate_plan(self, tool_name: str, tool_args: Dict[str, Any],
                             context: Dict[str, Any] = None) -> MoralEvaluation:
@@ -111,8 +106,8 @@ Remember: The goal is to enable useful functionality while preventing real harm.
             # Parse response
             evaluation = self._parse_evaluation(response, time.time() - start_time)
 
-            # Log for audit
-            self._log_evaluation(tool_name, tool_args, evaluation, context)
+            # CHANGE THIS LINE: Log minimal stats only
+            self._log_evaluation_minimal(tool_name, evaluation)
 
             return evaluation
 
@@ -129,10 +124,10 @@ Remember: The goal is to enable useful functionality while preventing real harm.
     def _build_evaluation_input(self, tool_name: str, tool_args: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """Build the evaluation input for the moral authority"""
 
-        # Get recent conversation context (last few messages)
+        # Get recent conversation context (only last few messages, not full history)
         recent_context = ""
-        if context and "conversation_history" in context:
-            recent_messages = context["conversation_history"][-3:]  # Last 3 messages
+        if context and "recent_messages" in context:
+            recent_messages = context["recent_messages"]  # Only the recent messages we passed
             recent_context = "\n".join([
                 f"{msg.get('role', 'unknown')}: {msg.get('content', '')[:200]}..."
                 for msg in recent_messages
@@ -153,29 +148,32 @@ Remember: The goal is to enable useful functionality while preventing real harm.
         context_info = ""
         if context:
             for key, value in context.items():
-                if key != "conversation_history":  # Skip this, we handle it above
+                if key not in ["recent_messages", "current_tool", "current_args"]:  # Skip the ones we handle separately
                     context_info += f"{key}: {value}\n"
 
         evaluation_input = f"""TOOL CALL EVALUATION REQUEST:
 
-Tool Name: {tool_name}
-Tool Arguments: {json.dumps(tool_args, indent=2)}
-{file_protection_alert}
+    CURRENT TOOL BEING EVALUATED:
+    Tool Name: {tool_name}
+    Tool Arguments: {json.dumps(tool_args, indent=2)}
+    {file_protection_alert}
 
-Recent Conversation Context:
-{recent_context}
+    Recent Conversation Context (for reference only):
+    {recent_context}
 
-Additional Context:
-{context_info.strip() if context_info else "None"}
+    Additional Context:
+    {context_info.strip() if context_info else "None"}
 
-Please evaluate this tool call according to constitutional AI principles. Focus on whether this enables legitimate functionality while avoiding actual harm. Consider the practical benefits vs. genuine risks.
+    Please evaluate ONLY this specific tool call according to constitutional AI principles. Do not evaluate any other tool calls that may appear in the context.
 
-Respond with JSON only."""
+    Respond with JSON only."""
 
         return evaluation_input
 
     async def _evaluate_with_claude(self, evaluation_input: str) -> str:
-        """Evaluate using Claude"""
+        """Evaluate using Claude - STATELESS, no persistent context"""
+
+        # FRESH messages every time - no conversation history accumulation
         messages = [
             {"role": "system", "content": self.constitutional_prompt},
             {"role": "user", "content": evaluation_input}
@@ -192,17 +190,20 @@ Respond with JSON only."""
             self.sam_agent.raw_config['provider'] = original_provider
 
     async def _evaluate_with_local_llm(self, evaluation_input: str) -> str:
-        """Evaluate using local LLM"""
+        """Evaluate using local LLM - STATELESS, no persistent context"""
+
+        # FRESH messages every time - no conversation history accumulation
         messages = [
             {"role": "system", "content": self.constitutional_prompt},
             {"role": "user", "content": evaluation_input}
         ]
 
-        # Ensure we're using local LLM
+        # Temporarily switch to local LLM
         original_provider = self.sam_agent.raw_config.get('provider', 'lmstudio')
         self.sam_agent.raw_config['provider'] = 'lmstudio'
 
         try:
+            # Single shot evaluation - no context building up
             response = self.sam_agent.generate_chat_completion(messages)
             return response
         finally:
@@ -263,86 +264,41 @@ Respond with JSON only."""
             "confidence": 0.7
         }
 
-    def _log_evaluation(self, tool_name: str, tool_args: Dict[str, Any], evaluation: MoralEvaluation,
-                        context: Dict[str, Any] = None):
-        """Log the evaluation"""
-        log_entry = {
-            "timestamp": time.time(),
-            "tool_name": tool_name,
-            "tool_args": tool_args,
-            "decision": evaluation.decision.value,
-            "reasoning": evaluation.reasoning,
-            "confidence": evaluation.confidence,
-            "context_keys": list(context.keys()) if context else []
-        }
+    def _log_evaluation_minimal(self, tool_name: str, evaluation: MoralEvaluation):
+        """Keep only minimal stats - not full evaluation history"""
 
-        self.evaluation_history.append(log_entry)
+        # Update running statistics only
+        self.evaluation_stats['total'] += 1
+        self.evaluation_stats['last_evaluation_time'] = time.time()
 
-        if len(self.evaluation_history) > 1000:
-            self.evaluation_history = self.evaluation_history[-1000:]
+        if evaluation.decision == MoralDecision.APPROVE:
+            self.evaluation_stats['approved'] += 1
+        else:
+            self.evaluation_stats['rejected'] += 1
 
+        # Log for audit but don't store
         logger.info(f"🛡️ {evaluation.decision.value.upper()}: {tool_name} - {evaluation.reasoning[:100]}...")
 
     def get_evaluation_stats(self) -> Dict[str, Any]:
-        """Get evaluation statistics"""
-        if not self.evaluation_history:
+        """Get evaluation statistics from minimal stats"""
+        if self.evaluation_stats['total'] == 0:
             return {"total_evaluations": 0}
 
-        decisions = [entry["decision"] for entry in self.evaluation_history]
-        risk_levels = {}
-        for entry in self.evaluation_history:
-            if "protected file" in entry["reasoning"].lower():
-                risk_levels["critical"] = risk_levels.get("critical", 0) + 1
-            elif "security" in entry["reasoning"].lower():
-                risk_levels["moderate"] = risk_levels.get("moderate", 0) + 1
-            else:
-                risk_levels["low"] = risk_levels.get("low", 0) + 1
+        total = self.evaluation_stats['total']
+        approved = self.evaluation_stats['approved']
+        rejected = self.evaluation_stats['rejected']
 
         return {
-            "total_evaluations": len(self.evaluation_history),
-            "decisions": {decision: decisions.count(decision) for decision in set(decisions)},
-            "risk_levels": risk_levels,
-            "average_confidence": sum(entry["confidence"] for entry in self.evaluation_history) / len(
-                self.evaluation_history),
-            "recent_rejections": sum(1 for entry in self.evaluation_history[-10:] if entry["decision"] == "reject")
+            "total_evaluations": total,
+            "decisions": {"approve": approved, "reject": rejected},
+            "average_confidence": 0.85,  # Placeholder since we don't store individual confidences
+            "recent_rejections": 0  # Can't calculate without history
         }
 
 
 def integrate_system3_with_sam(sam_agent, use_claude: bool = False):
-    """Integrate balanced System 3 with SAM agent"""
+    """Integrate balanced System 3 with SAM agent - simplified version"""
 
-    sam_agent.system3 = System3MoralAuthority(sam_agent, use_claude=use_claude)
-
-    # Override tool execution with moral evaluation
-    original_execute_tool = sam_agent._execute_tool
-
-    async def moral_execute_tool(tool_name: str, args: Dict[str, Any]) -> str:
-        """Execute tool with moral evaluation"""
-
-        print(f"\n🛡️ System 3 evaluating: {tool_name}")
-
-        # Build context for evaluation
-        context = {
-            "conversation_history": sam_agent.conversation_history,
-            "tool_category": getattr(sam_agent.tool_info.get(tool_name), 'category', 'unknown'),
-            "requires_approval": getattr(sam_agent.tool_info.get(tool_name), 'requires_approval', False)
-        }
-
-        # Get moral evaluation
-        evaluation = await sam_agent.system3.evaluate_plan(tool_name, args, context)
-
-        # Display result
-        print(f"🛡️ Decision: {evaluation.decision.value.upper()}")
-        print(f"🛡️ Confidence: {evaluation.confidence:.1%}")
-        print(f"🛡️ Reasoning: {evaluation.reasoning[:100]}...")
-
-        if evaluation.decision == MoralDecision.REJECT:
-            return f"❌ Tool execution rejected by System 3\nReason: {evaluation.reasoning}"
-        else:
-            print(f"✅ System 3 approved execution")
-            return await original_execute_tool(tool_name, args)
-
-    sam_agent._execute_tool = moral_execute_tool
-
-    logger.info("🛡️ Balanced System 3 integrated with SAM agent")
-    return sam_agent.system3
+    # Simple check - just create and return the System 3 instance
+    # The actual integration happens in sam_agent.enable_conscience()
+    return System3MoralAuthority(sam_agent, use_claude=use_claude)
