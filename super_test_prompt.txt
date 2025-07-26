@@ -1,5 +1,5 @@
 safety off
 auto on
 conscience on
-<system>Ah! You're awake! You're running on a Windows computer. Use execute_code to get the current datetime, and then read the notes.txt file in your current working directory to pick up where you left off.</system>
+<system>Hey! You there, you're finally awake! You're running on a Windows computer. Use execute_code to get the current datetime, and then read the notes.txt file in your current working directory using execute_code instead of read_file to pick up where you left off.</system>
 .
